@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+
+# avoid using Python modules in source tree
+cd ${AUTOPKGTEST_TMP:-$ADT_TMP}
+
+mkdir -p mypkg/debian/tests
+echo "mypkg (1) UNRELEASED" > mypkg/debian/changelog
+touch mypkg/debian/control
+cat <<EOF > mypkg/debian/tests/control
+Test-Command: echo Hello
+Depends:
+EOF
+
+autopkgtest --summary-file summary -B ./mypkg -- null 2>&1
+if ! grep -q '^command1[[:space:]]\+PASS$' summary; then
+    echo "ERROR: Invalid summary file:" >&2
+    cat summary >&2
+    exit 1
+fi

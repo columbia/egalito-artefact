@@ -1,0 +1,5 @@
+testpkg (1) UNRELEASED; urgency=low
+
+  * Initial release.
+
+ -- Martin Pitt <mpitt@debian.org>  Fri, 20 Sep 2013 18:05:01 -0500

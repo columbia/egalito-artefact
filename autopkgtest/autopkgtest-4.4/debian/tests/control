@@ -1,0 +1,23 @@
+Tests: autopkgtest adt-run
+Depends: autopkgtest,
+ autodep8,
+ build-essential,
+ debhelper (>= 7)
+Restrictions: needs-root
+Tests-Directory: tests
+
+Tests: pyflakes
+Depends: pyflakes
+Tests-Directory: tests
+
+Tests: installed
+Depends: autopkgtest
+
+Tests: lxd
+Depends: autopkgtest,
+ lxd,
+ lxd-client,
+ build-essential,
+ debhelper (>= 7),
+ fakeroot
+Restrictions: isolation-machine, needs-root, allow-stderr

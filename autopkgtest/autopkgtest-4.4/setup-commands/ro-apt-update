@@ -1,0 +1,17 @@
+#!/bin/sh
+# This script is is part of autopkgtest
+# Copyright (C) 2015 Canonical Ltd.
+# Author: Martin Pitt <martin.pitt@ubuntu.com>
+#
+# --setup-commands script for temporarily making the root file system writable,
+# run apt-get update, and make the root fs readable again. This allows tests to
+# download/unpack test dependencies on older images whose apt indexes are out
+# of date.
+
+set -e
+mount -o remount,rw /
+# ensure that this fails with something other than 100, as apt-get update
+# failures are usually transient
+apt-get update || (sleep 15; apt-get update) || false
+mount -o remount,ro /
+

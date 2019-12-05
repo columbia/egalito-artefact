@@ -1,0 +1,13 @@
+#!/bin/sh
+if [ "$AUTOPKGTEST_REBOOT_MARK" = phase1 ]; then
+    echo "continuing test after reboot"
+else
+    echo "beginning test"
+    /tmp/autopkgtest-reboot phase1
+    touch /var/pwned
+fi
+echo "end of test"
+if [ -e /var/pwned ]; then
+    echo "/var/pwned exists!!!" >&2
+    exit 1
+fi

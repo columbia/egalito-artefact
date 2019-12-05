@@ -1,0 +1,65 @@
+.TH autopkgtest-virt-chroot 1 2007 autopkgtest "Linux Programmer's Manual"
+.SH NAME
+autopkgtest-virt-chroot \- autopkgtest virtualisation server using a chroot
+.SH SYNOPSIS
+.BI "autopkgtest " "[...] " "-- chroot"
+.RI [ options ]
+.RI [\fB\-r\fR gain\-root\-cmd ]
+.I /path/to/chroot
+.SH DESCRIPTION
+.B autopkgtest-virt-chroot
+provides an autopkgtest virtualisation server using a chroot install
+(or similar).
+
+Normally
+.B autopkgtest-virt-chroot
+will be invoked by
+.BR autopkgtest .
+
+The chroot directory to use must be specified.
+
+.SH OPTIONS
+.TP
+.BR \-\-gain\-root | \-r " \fIgain\-root\-cmd\fR"
+Specifies that
+.B autopkgtest-virt-chroot
+can become root (on the host) by prefixing its commands with
+.IR gain-root-cmd .
+The command may consist of several words separated by whitespace,
+in which case words other than the first are supplied as additional
+arguments to the command; other shell (or other) metacharacters in
+.IR gain-root-cmd
+are not interpreted or modified by
+.BR autopkgtest-virt-chroot .
+The actual command to be run as root, and
+its arguments, are supplied as additional (separate) arguments to
+.IR gain-root-cmd .
+
+Root privilege is needed, to successfully run
+.BR chroot (8),
+if the chroot to use is specified as an absolute path.  The default is
+not to take any special action when root will be needed, in which case
+for an absolute path chroot,
+.B autopkgtest-virt-chroot
+must be started as root.
+.TP
+.BR \-d " | " \-\-debug
+Enables debugging output.  Probably not hugely interesting.
+
+.SH INPUT, OUTPUT AND EXIT STATUS
+The behaviour of
+.B autopkgtest-virt-chroot
+is as described by the AutomatedTesting virtualisation regime
+specification.
+
+.SH SEE ALSO
+\fBautopkgtest\fR(1),
+\fBautopkgtest-schroot\fR(1),
+\fB/usr/share/doc/autopkgtest/\fR.
+
+.SH AUTHORS AND COPYRIGHT
+This manpage is part of autopkgtest, a tool for testing Debian binary
+packages.  autopkgtest is Copyright (C) 2006-2007 Canonical Ltd and others.
+
+See \fB/usr/share/doc/autopkgtest/CREDITS\fR for the list of
+contributors and full copying conditions.

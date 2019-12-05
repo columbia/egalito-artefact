@@ -1,0 +1,75 @@
+#!/usr/bin/python3
+#
+# autopkgtest-virt-null is part of autopkgtest
+# autopkgtest is a tool for testing Debian binary packages
+#
+# autopkgtest is Copyright (C) 2006-2007 Canonical Ltd.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+#
+# See the file CREDITS for a full list of credits information (often
+# installed as /usr/share/doc/autopkgtest/CREDITS).
+
+import sys
+import os
+import argparse
+
+sys.path.insert(0, '/usr/share/autopkgtest/lib')
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), 'lib'))
+
+import VirtSubproc
+import adtlog
+
+
+capabilities = ['isolation-machine']
+if os.getuid() == 0:
+    capabilities.append('root-on-testbed')
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-d', '--debug', action='store_true',
+                        help='Enable debugging output')
+    args = parser.parse_args()
+    if args.debug:
+        adtlog.verbosity = 2
+
+
+def hook_open():
+    VirtSubproc.auxverb = ['env']  # no-op, but must not be empty
+
+
+def hook_downtmp(path):
+    global capabilities
+
+    d = VirtSubproc.downtmp_mktemp(path)
+    capabilities.append('downtmp-host=' + d)
+    return d
+
+
+def hook_cleanup():
+    global capabilities
+
+    VirtSubproc.downtmp_remove()
+    capabilities = [c for c in capabilities if not c.startswith('downtmp-host')]
+
+
+def hook_capabilities():
+    return capabilities
+
+
+parse_args()
+VirtSubproc.main()

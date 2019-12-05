@@ -1,0 +1,76 @@
+.TH autopkgtest-schroot 1 2013 autopkgtest "Linux Programmer's Manual"
+
+.SH NAME
+autopkgtest-schroot \- autopkgtest virtualisation server using a schroot
+.SH SYNOPSIS
+.BI "autopkgtest " "[...] " "-- schroot"
+.RI [ options ]
+.I schroot\-name
+
+.SH DESCRIPTION
+.B autopkgtest-schroot
+provides an autopkgtest virtualisation server using a schroot.
+Normally
+.B autopkgtest-schroot
+will be invoked by
+.BR autopkgtest .
+
+The schroot name to use must be specified.
+.B Only
+use this with schroots that provide temporary sessions, i. e. with
+.B type=file
+or
+.B type=directory
+and a configured
+.BR union\-type .
+.B autopkgtest-schroot
+will refuse to work with a static "directory" type schroot.
+
+You can use
+.BR mk-sbuild (1)
+to conveniently create schroots.
+
+.SH PERMISSIONS
+If you can access the schroot as
+your user (according to the schroot's \fBusers\fR/\fBgroups\fR configuration),
+you should run
+.B autopkgtest-schroot (and \fBautopkgtest itself\fR) as normal user, too.
+
+.B autopkgtest-schroot
+reads the schroot configuration (\fBroot-users\fR/\fBroot-groups\fR) to
+determine whether it can enter the schroot as root user; if so, it sets the
+.B root\-on\-testbed
+capability and you can run tests which require building or running as root. If
+your user is not allowed to do that, you need to run
+.B autopkgtest
+as root instead.
+
+.SH OPTIONS
+.TP
+.BI -s " ID" " | --session-id=" ID
+Use a custom schroot session ID. This allows the user to easily
+identify hung sessions in
+.B schroot --list --all-sessions\fR.
+
+.TP
+.BR \-d " | " \-\-debug
+Enables debugging output.
+
+.SH INPUT, OUTPUT AND EXIT STATUS
+The behaviour of
+.B autopkgtest-schroot
+is as described by the AutomatedTesting virtualisation regime
+specification.
+
+.SH SEE ALSO
+.BR autopkgtest (1),
+.BR autopkgtest-virt-null (1),
+.BR schroot (1),
+.BR mk\-sbuild (1).
+
+.SH AUTHORS AND COPYRIGHT
+This manpage is part of autopkgtest, a tool for testing Debian binary
+packages.  autopkgtest is Copyright (C) 2006-2013 Canonical Ltd and others.
+
+See \fB/usr/share/doc/autopkgtest/CREDITS\fR for the list of
+contributors and full copying conditions.

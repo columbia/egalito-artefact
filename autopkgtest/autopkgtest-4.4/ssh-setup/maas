@@ -1,0 +1,297 @@
+#!/bin/sh
+#
+# This script is part of autopkgtest
+# autopkgtest is a tool for testing Debian binary packages
+#
+# This script acquires and deploys a machine via MAAS to use as an autopkgtest
+# testbed. It assumes that MaaS is already set up, machines are commissioned to
+# it, and you added your ssh key to it.
+#
+# Positional parameters: <maas URL> <API key>
+#
+# Options:
+# -a ARCH, --architecture ARCH
+#       Target architecture for "maas node update"; e. g. "amd64/generic"
+# -r RELEASE, --release RELEASE
+#       Target release for "maas node start"
+# --acquire ARGS
+#       Keyword arguments for "maas nodes acquire" to select a target machine
+#       E. g. --acquire-args "arch=amd64 tags=touchscreen"
+# -d, --debug
+#       Enable debug output
+#
+# Author: Martin Pitt <martin.pitt@ubuntu.com>
+# autopkgtest is Copyright (C) 2006-2015 Canonical Ltd.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+#
+# See the file CREDITS for a full list of credits information (often
+# installed as /usr/share/doc/autopkgtest/CREDITS).
+set -eu
+
+CAPABILITIES='isolation-machine,reboot,revert,revert-full-system'
+
+SUDO_PASSWORD=''
+SSH_USER=ubuntu
+
+MAAS_URL=''
+APIKEY=''
+ARCH=''
+RELEASE=''
+ACQUIRE_ARGS=''
+DEBUG=""
+
+# This must be unique amongst concurrent autopkgtest runs
+APINAME="autopkgtest-$$"
+
+# MaaS substates
+DEFAULT=0               # A node starts out as NEW (DEFAULT is an alias for NEW).
+NEW=0                   # The node has been created and has a system ID assigned to it.
+COMMISSIONING=1         # Testing and other commissioning steps are taking place.
+FAILED_COMMISSIONING=2  # The commissioning step failed.
+MISSING=3               # The node can't be contacted.
+READY=4                 # The node is in the general pool ready to be deployed.
+RESERVED=5              # The node is ready for named deployment.
+DEPLOYED=6              # The node has booted into the operating system of its owner's choice and is ready for use.
+RETIRED=7               # The node has been removed from service manually until an admin overrides the retirement.
+BROKEN=8                # The node is broken: a step in the node lifecyle failed.
+DEPLOYING=9             # The node is being installed.
+ALLOCATED=10            # The node has been allocated to a user and is ready for deployment.
+FAILED_DEPLOYMENT=11    # The deployment of the node failed.
+RELEASING=12            # The node is powering down after a release request.
+FAILED_RELEASING=13     # The releasing of the node failed.
+DISK_ERASING=14         # The node is erasing its disks.
+FAILED_DISK_ERASING=15  # The node failed to erase its disks.
+
+
+debug() {
+    [ -z "$DEBUG" ] && return
+    /bin/echo -e "maas DBG: $@">&2
+}
+
+info() {
+    /bin/echo -e "maas: $@">&2
+}
+
+error() {
+    /bin/echo -e "maas ERROR: $@">&2
+    cleanup
+    exit 1
+}
+
+get_state() {
+    out=$(maas "$APINAME" node read "$SYSTEM_ID")
+    state=$(echo "$out" | sed -n '/"substatus":/ {s/^.*": //; s/, *$//; p}')
+    if [ -z "$state" ]; then
+        error "Could not read substatus from 'maas node read':\n$out"
+    fi
+}
+
+parse_args() {
+    # Parse command line argument and populate environment
+
+    SHORTOPTS="a:,r:,d"
+    LONGOPTS="arch:,release:,acquire:,debug,id:,apiname:"
+
+    TEMP=$(getopt -o $SHORTOPTS --long $LONGOPTS -- "$@")
+    eval set -- "$TEMP"
+
+    while true; do
+        case "$1" in
+            -a|--arch)
+                ARCH=$2
+                shift 2;;
+            -r|--release)
+                RELEASE=$2
+                shift 2;;
+            --acquire)
+                ACQUIRE_ARGS=$2
+                shift 2;;
+            -d|--debug)
+                DEBUG=1
+                shift;;
+            # private options
+            --id)
+                SYSTEM_ID="$2"
+                shift 2;;
+            --apiname)
+                APINAME="$2"
+                shift 2;;
+            --)
+                shift;
+                break;;
+            *)
+                error "$(basename $0): Unsupported option $1"
+        esac
+    done
+
+    MAAS_URL="${1:-}"
+    API_KEY="${2:-}"
+    if [ -z "$MAAS_URL" -o -z "$API_KEY" ]; then
+        error "Usage: $0 [options..] <maas URL> <API key>"
+    fi
+}
+
+# create a testbed (if necessary), configure ssh, copy ssh key into it,
+# configure sudo, etc.; print a list of "key=value" parameters to stdout on
+# success
+# required: login, hostname, and one of identity or password
+# optional: port, options, capabilities
+open() {
+    info "Logging into $MAAS_URL ..."
+    maas login "$APINAME" "$MAAS_URL" "$API_KEY" > /dev/null
+
+    info "Acquiring machine..."
+    OUT=$(maas "$APINAME" nodes acquire $ACQUIRE_ARGS) || error "$OUT"
+
+    # parse system ID
+    SYSTEM_ID=$(echo "$OUT" | sed -n '/"system_id":/ {s/^.*": "//; s/", *$//; p}')
+    HOSTNAME=$(echo "$OUT" | sed -n '/"hostname":/ {s/^.*": "//; s/", *$//; p}')
+    if [ -z "$SYSTEM_ID" ]; then
+        error "no system_id found in:\n$OUT"
+    fi
+    info "Got machine: hostname $HOSTNAME, system ID $SYSTEM_ID"
+
+    get_state
+    if [ $state != $ALLOCATED ]; then
+        error "Not in state ALLOCATED ($ALLOCATED), but current state is $state"
+    fi
+
+    if [ -n "$ARCH" ]; then
+        info "Setting architecture..."
+        OUT=$(maas "$APINAME" node update "$SYSTEM_ID" "architecture=$ARCH") || error "$OUT"
+    fi
+
+    # generate cloud-init user data for manage_etc_hosts, missing apt
+    # components and better apt performance
+    userdata=$(cat <<EOF | base64 -w0
+#cloud-config
+apt_sources:
+- source: deb-src \$MIRROR \$RELEASE main universe restricted multiverse
+- source: deb \$MIRROR \$RELEASE restricted multiverse
+- source: deb-src \$MIRROR \$RELEASE restricted multiverse
+- source: deb \$MIRROR \${RELEASE}-updates restricted multiverse
+- source: deb-src \$MIRROR \${RELEASE}-updates restricted multiverse
+- source: deb \$MIRROR \${RELEASE}-security restricted multiverse
+- source: deb-src \$MIRROR \${RELEASE}-security restricted multiverse
+apt_update: true
+apt_upgrade: false
+packages:
+ - eatmydata
+
+runcmd:
+ - echo 'Acquire::Languages "none";' > /etc/apt/apt.conf.d/90nolanguages
+EOF
+)
+
+    info "Starting machine..."
+    args="user_data=$userdata"
+    if [ -n "$RELEASE" ]; then
+        args="$args distro_series=$RELEASE"
+    fi
+    OUT=$(maas "$APINAME" node start "$SYSTEM_ID" $args) || error "$OUT"
+
+    # wait up to 30 minutes for deployment
+    retry=180
+    while true; do
+        get_state
+        debug "state $state, retries left: $retry"
+        if [ "$state" = $DEPLOYED ]; then
+            break
+        elif [ "$state" = $FAILED_DEPLOYMENT ]; then
+            error "Deployment failed:\n$out"
+        elif [ "$state" != $DEPLOYING -a "$state" != $ALLOCATED ]; then
+            error "Unexpected substate $state during deployment:\n$out"
+        fi
+
+        retry=$(( retry - 1 ))
+        if [ $retry -le 0 ]; then
+            error "Timed out waiting for deployment. Aborting."
+        fi
+        sleep 10
+    done
+
+    # parse IP address
+    IPADDR=$(echo "$out" | grep -A1 '"ip_addresses"' | grep -o '[0-9.]\+')
+    debug "Got IP address $IPADDR"
+
+    # wait until ssh is available and cloud-config is done
+    debug "Waiting until ssh becomes available"
+    SSH="ssh -q -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -l $SSH_USER $IPADDR"
+    retry=60
+    while ! $SSH true; do
+        retry=$(( retry - 1 ))
+        if [ $retry -le 0 ]; then
+            error "Timed out waiting for ssh. Aborting!"
+        fi
+        sleep 5
+    done
+    debug "Waiting for cloud-init to finish"
+    if ! timeout 30m $SSH 'while [ ! -e /var/lib/cloud/instance/boot-finished ]; do sleep 1; done'; then
+        error "Timed out waiting for cloud-init to finish. Aborting!"
+    fi
+
+    cat<<EOF
+login=$SSH_USER
+hostname=$IPADDR
+capabilities=$CAPABILITIES
+extraopts=--id=$SYSTEM_ID --apiname=$APINAME
+EOF
+}
+
+cleanup() {
+    if [ -n "${SYSTEM_ID:-}" ]; then
+        OUT=$(maas "$APINAME" node release "$SYSTEM_ID") || {
+            printf "maas ERROR: $@\n">&2
+            exit 1
+        }
+    fi
+    maas logout "$APINAME" || true
+    SYSTEM_ID=""
+}
+
+revert() {
+    if [ -z "$SYSTEM_ID" ]; then
+        error "Needs to be called with --id <server name>" >&2
+    fi
+    cleanup
+    open
+}
+
+# ########################################
+# Main procedure
+#
+if [ $# -eq 0 ]; then
+    error "Invalid number of arguments, command is missing"
+fi
+cmd=$(echo $1|tr [[:upper:]] [[:lower:]])
+shift
+parse_args "$@"
+
+case $cmd in
+    open)
+        open;;
+    cleanup)
+        cleanup;;
+    revert)
+        revert;;
+    wait-reboot)
+        exit 1;; # use default implementation
+    '')
+        error "Needs to be called with command as first argument" >&2
+        ;;
+    *)
+        error "invalid command $cmd" >&2
+esac

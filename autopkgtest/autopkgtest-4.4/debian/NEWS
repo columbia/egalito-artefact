@@ -1,0 +1,23 @@
+autopkgtest (4.0) unstable; urgency=medium
+
+  Please adjust your existing CI system/scripts for the new CLI, tools, and
+  API introduced in version 4.0:
+
+  * This release adds a new "autopkgtest" CLI. This provides a simplified CLI
+    compared to the now deprecated adt-run; see the changelog for details.
+    The old "adt-run" CLI will still be available for some time.
+  * The adt-build* tools got renamed to autopkgtest-build*, and now build
+    images prefixed with"autopkgtest" instead of "adt". There are
+    compatibility symlinks for the old commands, and when being called through
+    them, also produce images with the old adt* names.
+  * The public ADT_* env variables got renamed to AUTOPKGTEST_*:
+    - AUTOPKGTEST_APT_PROXY
+    - AUTOPKGTEST_ARTIFACTS
+    - AUTOPKGTEST_AUTOPILOT_MODULE
+    - AUTOPKGTEST_NORMAL_USER
+    - AUTOPKGTEST_REBOOT_MARK
+    - AUTOPKGTEST_TMP
+    As these are being used in existing tests and tools, they are also
+    exported/checked under their old ADT_* name.
+
+ -- Martin Pitt <mpitt@debian.org>  Sun, 05 Jun 2016 19:37:59 +0200

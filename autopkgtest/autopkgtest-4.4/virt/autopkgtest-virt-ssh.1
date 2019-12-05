@@ -1,0 +1,291 @@
+.TH autopkgtest-virt-ssh 1 2014 "Linux Programmer's Manual"
+.SH NAME
+autopkgtest-virt-ssh \- autopkgtest virtualisation server using SSH
+
+.SH SYNOPSIS
+.BI "autopkgtest " "[...] " "-- ssh"
+.RI [ options ]
+.I [\fI-- setup script options\fR ...]
+
+
+.SH DESCRIPTION
+.B autopkgtest-virt-ssh
+provides an autopkgtest virtualisation server using SSH.
+
+Normally
+.B autopkgtest-virt-ssh
+will be invoked by
+.BR autopkgtest .
+
+.B autopkgtest-virt-ssh
+can use an already existing ssh target, or call a setup script to create/set up
+a test bed and the ssh server.
+
+.B WARNING!
+autopkgtest-virt-ssh will modify the target system by installing packages and running
+arbitrary test code, so
+.B you are responsible for resetting the testbed youself
+especially without a setup script. So use this with care.
+
+.SH REQUIREMENTS
+.B autopkgtest-virt-ssh
+doesn't assume anything regarding the target host other than that the given ssh
+connection (and networking) stay available all the time. You can provide
+credententials on the command line for already working SSH hosts or use a
+setup script to prepare the host for the connection (see
+.B SETUP SCRIPT
+below for more information), for example to create a
+forwarding rule to access an adb host over ssh or start a cloud instance.
+
+.SH OPTIONS
+
+.TP
+.BR -h | --help
+Show the help message and exit
+
+.TP
+.BR -d | --debug
+Enable debugging output
+
+.TP
+.BI  -H  " hostname" " | --hostname=" hostname
+Connects and logs into the specified hostname or IP address
+
+.TP
+.BI  -l " user" " | --login=" user
+Specifies the user to log in as on the remote machine.
+
+.TP
+.BI  -i " identity" " | --identity=" identity
+Selects a file from which the identity (private key) for public key
+authentication is read. Should usually be
+.BR ~/.ssh/id_rsa ,
+but you might consider using a different key for tests.
+
+.TP
+.BI  -P " password" " | --password=" password
+Specifies the sudo password on the remote host.
+
+It can be the password in clear text or a file containing the password. This
+password will be used to setup $SUDO_ASKPASS in the case sudo requires a
+password. The runner will check if the user has sudo access with and without a
+password. If the check fails, the capability "root-on-testbed" will not be
+available. If sudo works, then tests that run as user will have
+$SUDO_ASKPASS in their environment so that they can run
+.B sudo -A
+if needed.
+
+.TP
+.BI  -p " port" " | --port=" port
+ssh port to use to connect to the host
+
+.TP
+.BI  -o " options" " | --options=" options
+Passed verbatim to ssh; see man ssh_config
+
+.TP
+.BR -r | --reboot
+Indicate that
+.B reboot
+can be used in the testbed. This is useful when running rebooting tests without
+a setup script (which can already declare capabilities).
+
+.TP
+.BI --capability CAPABILITY
+Indicate that the testbed has the given capability (see
+README.virtualisation-server). This option can be specified multiple times.
+
+This is useful when running rebooting tests without a setup script (which can
+already declare capabilities).
+
+WARNING: Never use this on precious testbeds, as specifying options like
+.B revert
+or
+.B isolation-machine
+can irrecoverably destroy the testbed!
+
+.TP
+.BI  -s " setup_script" " | --setup-script=" setup_script
+Setup script to prepare testbed and ssh connection (See
+.B SETUP SCRIPT
+below for more information). File names
+will be searched in both the current directory and in
+.B /usr/share/autopkgtest/ssh-setup/
+so you do not need to give the full path for setup scripts shipped with
+autopkgtest.
+
+.TP
+.BI  "--timeout-ssh=" secs
+Timeout for waiting for ssh connection, in seconds. Default is 300.
+
+.TP
+.BI -- " [setup script arguments] "
+All the remaining arguments following \fB--\fR will be passed verbatim to the setup
+script to configure the host.
+
+
+.SH CONFIGURATION FILES
+If you use lots of options or hosts, you can put parts of, or the whole
+command line into a text file, with one line per option. E. g. you can create a
+file
+.I testhost.cfg
+with contents like
+
+.RS
+.EX
+-Htest.example.com
+-ltestuser
+-Ps3kr1t
+.EE
+.RE
+
+and then run
+
+.RS
+.EX
+autopkgtest [...] -- ssh @testhost.cfg
+.EE
+.RE
+
+The contents of the configuration file will be expanded in-place as if you
+would have given its contents on the command line. Please ensure that you
+.B don't place spaces
+between short options and their values, they would become a part of the
+argument value.
+
+.SH INPUT, OUTPUT AND EXIT STATUS
+The behaviour of
+.B autopkgtest-virt-ssh
+is as described by the AutomatedTesting virtualisation regime
+specification.
+
+.SH NOTES
+
+\fBautopkgtest\fR does not run \fBapt-get update\fR at the start of a package
+build, which can cause a build failure if you are using a development
+series template. You will need to run \fBapt-get update\fR in the template
+yourself (e. g. using \fB\-\-setup\-commands\fR).
+
+.SH SETUP SCRIPT
+
+.B autopkgtest-virt-ssh
+accepts a setup script in argument to prepare the testbed and the ssh
+connection. A setup script is an executable that gets called with a command as
+first argument, and additional options for that command.
+
+.SS command: open
+When called with "open", the script has to create a testbed (if necessary),
+configure ssh, copy ssh key into it, configure sudo, etc.
+
+It then returns the following information on standard output with the form
+\fBkey=value\fR, one line per pair. These mostly mirror the command line
+options when not using a script.
+
+Required fields:
+
+.IP * 4
+login: User name
+
+.IP * 4
+hostname: hostname or IP address
+
+.PP
+Optional fields:
+
+.IP * 4
+identity: Path to the private key
+
+.IP * 4
+password: sudo password for the user name to acquire root privileges. If not
+given, and passwordless sudo does not work, the testbed will not have root
+privileges.
+
+.IP * 4
+port: SSH port on hostname, if different than 22
+
+.IP * 4
+capabilities: extra testbed capabilities such as "isolation-machine" or
+"revert", see README.virtualisation-server.rst
+
+If the testbed can be rebooted with keeping state, the script should advertise
+"reboot".
+
+.IP * 4
+options: passed verbatim to ssh, see man ssh_config
+
+.IP * 4
+extraopts: passed verbatim to other commands; this allows extra state (such as
+temporary directory names, VM identifiers, etc.) to be passed to cleanup
+
+.SS command: cleanup
+Called when closing the testbed; should revert/remove things installed in
+open as much as possible if the testbed is not ephemeral. This gets called with
+all the options that open got called with, plus
+.BR extraopts .
+
+.SS command: revert
+If there is a way to reset the testbed to its pristine state (such as using VM
+snapshots or rebuilding ephemeral testbeds), the script should put "revert"
+(and if appropriate, "revert-full-system") into the capabilities and implement
+this command. This can optionally output some or all of the ssh config keys
+from open() to update the configuration, in case the hostname/IP changes.
+
+.SS command: wait-reboot
+This can be implemented if capabilities advertise "reboot" and you need to do
+something more elaborate than just waiting for the ssh port to go down and come
+back up after calling "reboot". This needs to wait for testbed to shut down,
+boot, and re-prepare the testbed for ssh login.
+
+.SS command: debug-failure
+
+This is called when the setup script fails with nonzero or on timeouts waiting
+for ssh or reboot. If available, this should output some debugging information,
+such as the boot log from the serial console. Implementing this is
+optional.
+
+.SS Included scripts
+
+.RE
+autopkgtest provides setup scripts for common types of testbeds in
+.BR /usr/share/autopkgtest/ssh-setup/ .
+Please see the comments in these scripts for how to use them. Also, please
+consider using
+.B /usr/share/autopkgtest/ssh-setup/SKELETON
+as a basis for writing your own.
+
+.SH EXAMPLES
+
+Run the tests of the gdk-pixbuf source package on an existing "mytesthost":
+
+.RS
+.EX
+autopkgtest gdk-pixbuf -- ssh -H mytesthost -l joe -P /tmp/joe_password
+.EE
+.RE
+
+Run the tests of a click package on an Ubuntu phone with an ssh connection over
+ADB, using the setup script, with specifying an option to the setup script to
+pick a particular serial ID:
+
+.RS
+.EX
+autopkgtest ./ubuntu-calculator-app ./com.ubuntu.calculator_1.3.283_all.click \\
+  -- ssh -s /usr/share/autopkgtest/ssh-setup/adb -- -s 0123456789abcdef
+.EE
+.RE
+
+.SH SEE ALSO
+.BR autopkgtest (1),
+.BR /usr/share/doc/autopkgtest/ ,
+.BR /usr/share/autopkgtest/ssh-setup/SKELETON .
+
+.SH AUTHORS AND COPYRIGHT
+.B autopkgtest-virt-ssh
+was written by Martin Pitt <martin.pitt@ubuntu.com> and Jean-Baptiste
+Lallement <jean.baptiste.lallement@ubuntu.com>.
+
+This manpage is part of autopkgtest, a tool for testing Debian binary
+packages.  autopkgtest is Copyright (C) 2006-2014 Canonical Ltd and others.
+
+See \fB/usr/share/doc/autopkgtest/CREDITS\fR for the list of
+contributors and full copying conditions.

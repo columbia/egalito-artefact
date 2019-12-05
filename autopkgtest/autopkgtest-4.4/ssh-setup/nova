@@ -1,0 +1,430 @@
+#!/bin/sh
+#
+# This script is part of autopkgtest
+# autopkgtest is a tool for testing Debian binary packages
+#
+# This script sets up a nova instance to use as an autopkgtest testbed. It
+# assumes that the host system is already prepared to run nova commands.
+
+# Options:
+#
+# -f flavor | --flavor=flavor
+#        Name or ID of flavor (see 'nova flavor-list'), mandatory
+# -i image | --image=image
+#        UUID or regex pattern of image (see 'nova image-list'), mandatory
+# -k keyname | --keyname=keyname
+#        Key name of keypair that should be created earlier with  the  command
+#        'nova keypair-add'; if not given, default to the first key in
+#        'nova keypair-list'
+# -N net-id | --net-id=net-id
+#        name or UUID of the network that should be used for the instance
+# -s secgroup1,secgroup2 | --security-groups secgroup1,secgroup2
+#        Assign given security groups to the testbeds, instead of the
+#        'default' one.
+# -a | --associate-ip
+#        If the internal instance IP is not accessible to you, this option will
+#        request and associate a floating IP to the instance.
+# -l username | --login=username
+#        User name to log in as. Defaults to "ubuntu" if not specified.
+# -n name | --name=name
+#        Name for the new server. A name will be generated if not specified.
+# -e 'name=value' | --env='name=value'
+#        Additional environment variable to put into the testbed's
+#        /etc/environment. Mostly useful to set $http_proxy and friends.
+#        Can be specified multiple times.
+# --mirror=URL
+#        Use given archive mirror for apt
+# --nova-reboot
+#        Use "nova reboot --poll" instead of "reboot" inside the instance
+#
+#
+# Authors:
+# Jean-Baptiste Lallement <jean-baptiste.lallement@canonical.com>
+# Martin Pitt <martin.pitt@ubuntu.com>
+#
+# autopkgtest is Copyright (C) 2006-2015 Canonical Ltd.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+#
+# See the file CREDITS for a full list of credits information (often
+# installed as /usr/share/doc/autopkgtest/CREDITS).
+set -eu
+
+CAPABILITIES='isolation-machine,reboot,revert,revert-full-system'
+
+SUDO_PASSWORD=''
+SSH_USER=ubuntu
+
+FLAVOR=""
+IMAGE=""
+KEYNAME=""
+SRVNAME=""
+SRVUUID=""
+NET_ID=""
+ASSOCIATE_IP=""
+FLOATING_IP=""
+SECURITY_GROUPS=""
+EXTRA_ENV=""
+MIRROR=""
+NOVA_REBOOT=""
+
+DEBUG=""
+
+debug() {
+    [ -z "$DEBUG" ] && return
+    echo "$@">&2
+}
+
+warning() {
+    echo "$@">&2
+}
+
+error() {
+    echo "$@">&2
+}
+
+parse_args() {
+    # Parse command line argument and populate environment
+
+    SHORTOPTS="f:,i:,k:,N:,l:,n:,s:,a,d,e:"
+    LONGOPTS="flavor:,image:,keyname:,net-id:,login:,name:,uuid:,security-groups:,associate-ip,floating-ip:,debug,env:,mirror:,nova-reboot"
+
+    TEMP=$(getopt -o $SHORTOPTS --long $LONGOPTS -- "$@")
+    eval set -- "$TEMP"
+
+    while true; do
+        case "$1" in
+            -f|--flavor)
+                FLAVOR=$2
+                shift 2;;
+            -i|--image)
+                IMAGE=$2
+                shift 2;;
+            -k|--keyname)
+                KEYNAME=$2
+                shift 2;;
+            -N|--net-id)
+                NET_ID="$2"
+                shift 2;;
+            -l|--login)
+                SSH_USER=$2
+                shift 2;;
+            -n|--name)
+                SRVNAME=$2
+                shift 2;;
+            --uuid)
+                SRVUUID=$2
+                shift 2;;
+            -s|--security-groups)
+                SECURITY_GROUPS="$2"
+                shift 2;;
+            -a|--associate-ip)
+                ASSOCIATE_IP=1; shift;;
+            --floating-ip)
+                FLOATING_IP="$2"; shift 2;;
+            -e|--env)
+                EXTRA_ENV="$EXTRA_ENV\n$2"; shift 2;;
+            --mirror)
+                MIRROR="apt_mirror: $2"; shift 2;;
+            --nova-reboot)
+                NOVA_REBOOT=1; shift;;
+            -d|--debug)
+                DEBUG=1; shift;;
+            --)
+                shift;
+                break;;
+            *)
+                error "E: $(basename $0): Unsupported option $1"
+                exit 1;;
+        esac
+    done
+
+    if [ -z "$FLAVOR" ]; then
+        error "Argument 'flavor' is mandatory. Run 'nova flavor-list' to "\
+            "print a list of available flavors."
+        exit 1
+    fi
+    if [ -z "$IMAGE" ]; then
+        error "Argument 'image' is mandatory. Run 'nova image-list' to "\
+            "print a list of available images to boot from."
+        exit 1
+    fi
+}
+
+# create a testbed (if necessary), configure ssh, copy ssh key into it,
+# configure sudo, etc.; print a list of "key=value" parameters to stdout on
+# success
+# required: login, hostname, and one of identity or password
+# optional: port, options, capabilities
+open() {
+    # provide default key name
+    if [ -z "$KEYNAME" ]; then
+        # use first existing key
+        KEYNAME=$(nova keypair-list | awk 'BEGIN {FS="|"} /([0-9a-f][0-9a-f]:)+/ {print $2; exit }')
+        if [ -z "$KEYNAME" ]; then
+            error "Could not determine default key name from 'nova keypair-list'" \
+                  "Run 'nova keypair-add' to generate a key."
+            exit 1
+        fi
+        debug "Using nova key $KEYNAME"
+    fi
+
+    # check available images that match the given name, use the latest match
+    last=$(cat <<EOF | python3
+import os, re
+import novaclient.client
+nova = novaclient.client.Client('2', os.environ['NOVA_USERNAME'], os.environ['NOVA_PASSWORD'],
+                                os.environ['NOVA_PROJECT_ID'], auth_url=os.environ['OS_AUTH_URL'],
+                                region_name=os.environ['NOVA_REGION'])
+latest = None
+for i in nova.images.list():
+    if i.status == 'ACTIVE' and re.match('${IMAGE}', i.name):
+        if latest is None or i.created > latest.created:
+            latest = i
+if latest:
+    print('%s\t%s' % (latest.id, latest.name))
+EOF
+)
+
+    if [ -z "$last" ]; then
+        error "No nova image available that matches $IMAGE"
+        exit 1
+    fi
+    imageuuid=$(echo "$last" | cut -f1)
+    image=$(echo "$last" | cut -f2)
+
+    # Boot a nova instance and returns its connection parameters
+    [ -n "$SRVNAME" ] || SRVNAME=`mktemp -u autopkgtest-nova-XXXXXX`
+    echo "Creating nova instance $SRVNAME from image ${image} (UUID $imageuuid)..." >&2
+
+    # generate cloud-init user data; mostly for manage_etc_hosts, but also get
+    # rid of some unnecessary stuff in the VM; also fix /etc/hosts to work
+    # around LP #1494678
+    local userdata=`mktemp`
+    cat <<EOF > $userdata
+#cloud-config
+hostname: autopkgtest
+manage_etc_hosts: true
+apt_update: true
+apt_upgrade: false
+$MIRROR
+
+runcmd:
+ - echo 'Acquire::Languages "none";' > /etc/apt/apt.conf.d/90nolanguages
+ - echo 'force-unsafe-io' > /etc/dpkg/dpkg.cfg.d/autopkgtest
+ - printf '$EXTRA_ENV' >> /etc/environment
+ - sed -i -r '/^127.0.1.1/ s/autopkgtest-[^ ]+\\./autopkgtest\\./' /etc/hosts
+EOF
+
+    EXTRA_OPTS=''
+    if [ -n "$NET_ID" ]; then
+        # translate a name into a UUID
+        OUT=$(nova network-show $NET_ID)
+        NET_ID="$(echo "$OUT"| awk -F'|' '/ id / {gsub(" ", "", $3); print $3}')"
+        EXTRA_OPTS="$EXTRA_OPTS --nic net-id=$NET_ID"
+    fi
+
+    if [ -n "$SECURITY_GROUPS" ]; then
+        EXTRA_OPTS="$EXTRA_OPTS --security-groups $SECURITY_GROUPS"
+    fi
+
+    # Boot the instance; this might temporarily fail due to exceeding quota or
+    # some glitch, so retry a few times
+    retry=0
+    while true; do
+        retry=$((retry+1))
+        set +e
+        OUT=$(nova --debug boot --flavor $FLAVOR --key_name $KEYNAME --user-data $userdata \
+            --image "$imageuuid" $EXTRA_OPTS --poll $SRVNAME 2>&1)
+        rc=$?
+        set -e
+        uuid=$(echo "$OUT" | awk -F'|' '/ id / {gsub(" ", "", $3); print $3}')
+        [ $rc -ne 0 ] || break
+        error "nova boot failed (attempt #$retry):"
+        error "$OUT"
+        # clean up, in case this did create an instance
+        [ -z "$uuid" ] || nova delete "$uuid" || true
+        [ $retry -lt 3 ] || { rm $userdata; exit 1; }
+        sleep 300
+    done
+
+    # use UUID from now on, to avoid naming conflicts
+    if [ -z "$uuid" ]; then
+        error "Failed to parse UUID:"
+        error "$OUT"
+        nova delete "$SRVNAME" || true
+        exit 1
+    fi
+    SRVUUID="$uuid"
+    debug "Nova boot succeeded (instance: $SRVNAME, UUID: $SRVUUID)"
+    rm $userdata
+
+    if [ -n "$ASSOCIATE_IP" ]; then
+        OUT=$(nova floating-ip-create)
+        debug "requested floating IP:"
+        debug "$OUT"
+        FLOATING_IP=$(echo "$OUT" | grep -Eo '([0-9]+\.){3}[0-9]+')
+        ipaddr="$FLOATING_IP"
+        debug "got IP: $ipaddr"
+
+        nova floating-ip-associate $SRVUUID $ipaddr || {
+            error "failed to associate IP, deleting instance"
+            cleanup
+            exit 1
+        }
+        EXTRAOPTS="--floating-ip $ipaddr"
+    else
+        # Find IP address
+        ipaddr=""
+        retry=6
+        while [ -z "$ipaddr" ]; do
+            OUT=$(nova show --minimal $SRVUUID)
+            ipaddr=$(echo "$OUT" | awk 'BEGIN {FS="|"} $2 ~ /network/ {n=split($3,i,/,\s*/); gsub(" ", "", i[n]); print i[n]}')
+            retry=$(( retry - 1 ))
+            if [ $retry -le 0 ]; then
+                error "Failed to acquire an IP address. Aborting!"
+                error "$OUT"
+                cleanup
+                exit 1
+            fi
+            sleep 3
+        done
+        debug "Finding IP address succeeded: $ipaddr"
+        EXTRAOPTS=""
+    fi
+
+    # purge the device host key so that SSH doesn't print a scary warning
+    ssh-keygen -f ~/.ssh/known_hosts -R $ipaddr >/dev/null 2>&1 || true
+
+    # wait until ssh is available and cloud-config is done
+    debug "Waiting until ssh becomes available"
+    SSH="ssh -q -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -l $SSH_USER $ipaddr"
+    retry=60
+    while ! $SSH true; do
+        retry=$(( retry - 1 ))
+        if [ $retry -le 0 ]; then
+            error "Timed out waiting for ssh. Aborting! Console log:"
+            debug_failure
+            cleanup
+            exit 1
+        fi
+        sleep 5
+    done
+    debug "Waiting for cloud-init to finish"
+    if ! timeout 30m $SSH 'while [ ! -e /var/lib/cloud/instance/boot-finished ]; do sleep 1; done'; then
+        error "Timed out waiting for cloud-init to finish. Aborting! Console log:"
+        debug_failure
+        cleanup
+        exit 1
+    fi
+
+    cat<<EOF
+login=$SSH_USER
+hostname=$ipaddr
+capabilities=$CAPABILITIES
+extraopts=--uuid $SRVUUID $EXTRAOPTS
+EOF
+    if [ -n "$SUDO_PASSWORD" ]; then
+        echo "password=$SUDO_PASSWORD"
+    fi
+}
+
+cleanup() {
+    if [ -z "$SRVUUID" ]; then
+        error "No UUID given. Instance won't be deleted!"
+        exit 0
+    fi
+
+    nova delete $SRVUUID || true
+
+    # wait until it gets deleted, to avoid name collisions and quota overflow
+    retry=60
+    while nova show $SRVUUID >/dev/null 2>&1; do
+        retry=$(( retry - 1 ))
+        if [ $retry -le 0 ]; then
+            error "Timed out waiting for $SRVUUID to get deleted."
+        fi
+        sleep 5
+    done
+
+    # clean up floating IP
+    if [ -n "$FLOATING_IP" ]; then
+        nova floating-ip-delete $FLOATING_IP
+    fi
+    SRVUUID=""
+}
+
+revert() {
+    if [ -z "$SRVUUID" ]; then
+        echo "Needs to be called with --uuid <server UUID>" >&2
+        exit 1
+    fi
+    cleanup
+    open
+}
+
+wait_reboot() {
+    [ -n "$NOVA_REBOOT" ] || exit 1
+    if [ -z "$SRVUUID" ]; then
+        echo "Needs to be called with --uuid <server UUID>" >&2
+        exit 1
+    fi
+    if ! timeout 5m nova reboot --poll "$SRVUUID"; then
+        echo "soft reboot timed out, doing hard reboot" >&2
+        if ! nova reboot --hard --poll "$SRVUUID"; then
+            echo "hard reboot failed, aborting" >&2
+            exit 1
+        fi
+    fi
+}
+
+debug_failure() {
+    if [ -n "$SRVUUID" ]; then
+        echo "------- nova console-log $SRVUUID ($SRVNAME) ------" >&2
+        nova console-log $SRVUUID >&2 || true
+        echo "---------------------------------------------------" >&2
+    fi
+}
+
+# ########################################
+# Main procedure
+#
+if [ $# -eq 0 ]; then
+    error "Invalid number of arguments, command is missing"
+    exit 1
+fi
+cmd=$(echo $1|tr [[:upper:]] [[:lower:]])
+shift
+parse_args "$@"
+
+case $cmd in
+    open)
+        open;;
+    cleanup)
+        cleanup;;
+    revert)
+        revert;;
+    wait-reboot)
+        wait_reboot;;
+    debug-failure)
+        debug_failure;;
+    '')
+        echo "Needs to be called with command as first argument" >&2
+        exit 1
+        ;;
+    *)
+        echo "invalid command $cmd" >&2
+        exit 1
+esac

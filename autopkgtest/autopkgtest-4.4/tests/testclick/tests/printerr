@@ -1,0 +1,2 @@
+#!/bin/sh
+echo "Bad Things!" >&2

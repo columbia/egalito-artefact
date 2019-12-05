@@ -1,0 +1,146 @@
+.TH autopkgtest-buildvm-ubuntu-cloud  1 2014 "Linux Programmer's Manual"
+.SH NAME
+autopkgtest-buildvm-ubuntu-cloud \- Create Ubuntu cloud image based VM for autopkgtest-virt-qemu
+
+.SH SYNOPSIS
+.B autopkgtest-buildvm-ubuntu-cloud
+.RI [ options ]
+
+.SH DESCRIPTION
+.B autopkgtest-buildvm-ubuntu-cloud
+downloads an Ubuntu cloud image and configures it for autopkgtest's QEMU runner
+(\fBautopkgtest-virt-qemu\fR):
+
+.IP * 4
+Resize the image to 6 GB (by default, you can change this with an option),
+which ought to be sufficient for most tests.
+
+.IP * 4
+Create an user "ubuntu" with password "ubuntu".
+
+.IP * 4
+Add apt sources for "restricted" and "multiverse" components.
+
+.IP * 4
+Create an init.d script to start a root shell on ttyS1 at boot, so that
+.B autopkgtest-virt-qemu
+can be used without additional arguments or logging in through ttyS0.
+
+You can select release, architecture, apt proxy, etc. with options. The
+defaults are aimed at testing the development series of the architecture of
+your host system.
+
+.SH OPTIONS
+
+.TP
+.BI -a " arch" " | --arch=" arch
+Ubuntu architecture name, e. g. "i386" or "amd64". Default is the host system
+architecture.
+
+.TP
+.BI -r " codename" " | --release=" codename
+Ubuntu release code name, e. g. "trusty". Default is the current development
+series (this needs
+.B python-distro-info
+installed).
+
+.TP
+.BI -m " URL" " | --mirror=" URL
+Mirror for apt (default:
+.B http://archive.ubuntu.com/ubuntu\fR).
+
+.TP
+.BI -p " URL" " | --proxy=" URL
+Proxy for apt. If you have an apt proxy configured on the local host, the VM
+will automatically use this; otherwise there is no default.
+
+
+.TP
+.BI --cloud-image-url= URL
+URL from where to download the cloud images (default:
+http://cloud-images.ubuntu.com).
+
+.TP
+.BI -s " DISK_SIZE" " | --disk-size=" DISK_SIZE
+Grow downloaded image (which have a default size of 2GB) by this size (default:
+.B 4G\fR, i. e. the image will be 6GB big in total).
+
+.TP
+.BI -o " DIR" " | --output-dir=" DIR
+Output directory for generated image (default: current directory).
+
+.TP
+.BI -q " command" " | --qemu-command=" command
+QEMU command to run. This defaults to the
+.B qemu-system-*
+that matches your system architecture.
+
+.TP
+.BR \-v " | " \-\-verbose
+Show VM guest and cloud-init output.
+
+.TP
+.B --no-apt-upgrade
+Do not run apt-get dist-upgrade during initialization.
+
+.TP
+.BI "--post-command=" COMMAND
+Run shell command in the VM after the setup.
+
+.TP
+.BI "--metadata=" METADATA_FILE
+Use a custom cloud-init metadata file to initialize the cloud image VM.
+
+.TP
+.BI "--userdata=" USERDATA_FILE
+Use a custom cloud-init userdata file to initialize the cloud image VM.
+
+.TP
+.BI "--timeout=" SECONDS
+Timeout for cloud-init. Default is 3600 s.
+
+.SH CONFIGURATION FILES
+If you use lots of options, you can put parts of, or the whole
+command line into a text file, with one line per option. E. g. you can create a
+file
+.I trusty-i386.cfg
+with contents like
+
+.RS
+.EX
+-rtrusty
+-ai386
+--proxy=http://mysquid.mynetwork
+-v
+.EE
+.RE
+
+and then run
+
+.RS
+.EX
+autopkgtest-buildvm-ubuntu-cloud @trusty-i386.cfg
+.EE
+.RE
+
+The contents of the configuration file will be expanded in-place as if you
+would have given its contents on the command line. Please ensure that you
+.B don't place spaces
+between short options and their values, they would become a part of the
+argument value.
+
+.SH SEE ALSO
+\fBautopkgtest-virt-qemu\fR(1),
+\fBautopkgtest\fR(1),
+\fBhttp://cloud-images.ubuntu.com\fR,
+\fB/usr/share/doc/autopkgtest/\fR.
+
+.SH AUTHORS AND COPYRIGHT
+.B autopkgtest-buildvm-ubuntu-cloud
+was written by Martin Pitt <martin.pitt@ubuntu.com>
+
+This manpage is part of autopkgtest, a tool for testing Debian binary
+packages.  autopkgtest is Copyright (C) 2006-2014 Canonical Ltd and others.
+
+See \fB/usr/share/doc/autopkgtest/CREDITS\fR for the list of
+contributors and full copying conditions.

@@ -1,0 +1,42 @@
+#!/bin/sh
+set -eu
+arch=$(dpkg --print-architecture)
+if [ "$arch" != i386 -a "$arch" != amd64 ]; then
+    # we don't have LXD images for most non-x86 architectures
+    echo "Skipping on non-x86 architecture $arch"
+    exit 0
+fi
+
+if [ -e /etc/default/lxd-bridge ]; then
+    cat <<EOF > /etc/default/lxd-bridge
+ USE_LXD_BRIDGE="true"
+ LXD_BRIDGE="lxdbr0"
+ UPDATE_PROFILE="true"
+ LXD_CONFILE=""
+ LXD_DOMAIN="lxd"
+ LXD_IPV4_ADDR="10.0.8.1"
+ LXD_IPV4_NETMASK="255.255.255.0"
+ LXD_IPV4_NETWORK="10.0.8.1/24"
+ LXD_IPV4_DHCP_RANGE="10.0.8.10,10.0.8.254"
+ LXD_IPV4_DHCP_MAX="200"
+ LXD_IPV4_NAT="true"
+ LXD_IPV6_ADDR="fd3b:ba81:269c:19c4::1"
+ LXD_IPV6_MASK="64"
+ LXD_IPV6_NETWORK="fd3b:ba81:269c:19c4::1/64"
+ LXD_IPV6_NAT="false"
+ LXD_IPV6_PROXY="false"
+EOF
+else
+    lxc network create lxdbr0 ipv4.address=10.0.8.1/24 ipv4.nat=true ipv6.address=fd3b:ba81:269c:19c4::1/64 --force-local
+    lxc network attach-profile lxdbr0 default eth0 --force-local
+fi
+
+# work around broken PTMU in Canonical Scalingstack
+iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+
+cat <<EOF | su - $AUTOPKGTEST_NORMAL_USER
+autopkgtest-build-lxd images:ubuntu/xenial/$arch
+export AUTOPKGTEST_TEST_LXD=autopkgtest/ubuntu/xenial/$arch
+cd $(pwd)
+tests/autopkgtest LxdRunner
+EOF

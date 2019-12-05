@@ -1,0 +1,519 @@
+#!/usr/bin/python3
+#
+# autopkgtest-virt-ssh is part of autopkgtest
+# autopkgtest is a tool for testing Debian binary packages
+#
+# autopkgtest is Copyright (C) 2006-2015 Canonical Ltd.
+#
+# Authors:
+#    Jean-Baptiste Lallement <jean-baptiste.lallement@canonical.com>
+#    Martin Pitt <martin.pitt@ubuntu.com>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+#
+# See the file CREDITS for a full list of credits information (often
+# installed as /usr/share/doc/autopkgtest/CREDITS).
+
+import sys
+import os
+import argparse
+import tempfile
+import shutil
+import pipes
+import time
+import subprocess
+import socket
+
+sys.path.insert(0, '/usr/share/autopkgtest/lib')
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), 'lib'))
+
+import VirtSubproc
+import adtlog
+
+capabilities = []
+args = None
+workdir = None
+sshcmd = None
+sshconfig = {'identity': None,
+             'login': None,
+             'password': None,
+             'port': None,
+             'options': None,
+             'hostname': None,
+             'capabilities': None,
+             'extraopts': None}
+# Note: Running in jenkins might require -tt
+sshopts = '-q -o BatchMode=yes -o UserKnownHostsFile=/dev/null '\
+          '-o StrictHostKeyChecking=no -o CheckHostIP=no '\
+          '-o ControlMaster=auto -o ControlPersist=60 '\
+          '-o ControlPath=%s/ssh_control-%%r@%%h:%%p'
+
+
+# Tests or builds sometimes leak background processes which might still be
+# connected to ssh's stdout/err; we need to kill these after the main program
+# (build or test script) finishes, otherwise we get eternal hangs as ssh waits
+# until nothing is connected to its tty any more. So we run this in ssh,
+# wrapping the actual command.
+# We also want to avoid exiting with 255 as that's ssh's exit code if something
+# with the connection failed; so we translate that to 253.
+terminal_kill_wrapper = '''#!/bin/bash
+set -u
+PPPID=$(cut -f4 -d' ' /proc/$PPID/stat)
+%s
+"$@"; RC=$?
+set -e
+myout=$(readlink /proc/$$/fd/1)
+myerr=$(readlink /proc/$$/fd/2)
+myout="${myout/[/\\\\[}"; myout="${myout/]/\\\\]}"
+myerr="${myerr/[/\\\\[}"; myerr="${myerr/]/\\\\]}"
+
+# determine processes which have myout or myerr open
+PS=$(ls -l /proc/[0-9]*/fd/* 2>/dev/null | sed -nr '\#('"$myout"'|'"$myerr"')# { s#^.*/proc/([0-9]+)/.*$#\\1#; p}'|sort -u)
+
+KILL=""
+for pid in $PS; do
+    [ $pid -ne $$ ] && [ $pid -ne $PPID ] && [ $pid -ne $PPPID ] || continue
+    [ -r /proc/$pid/comm ] && [ "$(< /proc/$pid/comm)" != sshd ] || continue
+    #echo "XXXautopkgtest-ssh-wrapper($$ $PPID $PPPID $myout $myerr): killing $pid (`cat /proc/$pid/cmdline`)" >&2
+    KILL="$KILL $pid"
+done
+
+[ -z "$KILL" ] || kill -9 $KILL || true
+[ $RC != 255 ] || RC=253
+exit $RC
+'''
+
+
+cleanup_paths = []  # paths on the device which we created
+
+
+def parse_args():
+    global args, capabilities
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('-d', '--debug', action='store_true',
+                        help='Enable debugging output')
+    parser.add_argument('-H', '--hostname',
+                        help='hostname with optional user: [user@]hostname')
+    parser.add_argument('-i', '--identity',
+                        help='Selects a file from which the identity '
+                        '(private key) for public key authentication is '
+                        'read')
+    parser.add_argument('-l', '--login',
+                        help='Specifies the user to log in as on the '
+                        'remote machine.')
+    parser.add_argument('-P', '--password',
+                        help='Specifies the sudo password on the remote host.'
+                        ' It can be the password in clear text or a file '
+                        'containing the password.')
+    parser.add_argument('-p', '--port', type=str,
+                        help='ssh port to use to connect to the host')
+    parser.add_argument('-o', '--options',
+                        help='Passed verbatim to ssh; see man ssh_config')
+    parser.add_argument('-r', '--reboot', action='store_true',
+                        help='Indicate that testbed supports reboot')
+    parser.add_argument('--capability', action='append',
+                        help='Indicate that testbed supports given capability.'
+                        ' Can be specified multiple times. Never use this on '
+                        'precious testbeds!')
+    parser.add_argument('-s', '--setup-script',
+                        help='Setup script to prepare testbed and ssh connection')
+    parser.add_argument('--timeout-ssh', metavar='SECS', type=int, default=300,
+                        help='Timeout for waiting for the ssh connection, in '
+                        'seconds (default: %(default)s)')
+    parser.add_argument('scriptargs', nargs=argparse.REMAINDER,
+                        help='Additional arguments to pass to the setup '
+                        'script for configuration')
+
+    args = parser.parse_args()
+    if args.debug:
+        adtlog.verbosity = 2
+    adtlog.debug(str(args))
+
+    # shortcut for shipped scripts
+    if args.setup_script and not os.path.exists(args.setup_script):
+        shipped_script = os.path.join('/usr/share/autopkgtest/ssh-setup',
+                                      args.setup_script)
+        if os.path.exists(shipped_script):
+            args.setup_script = shipped_script
+
+    # turn --password file path into the actual password
+    if args.password and os.path.exists(args.password):
+        with open(args.password) as f:
+            args.password = f.read().strip()
+
+    if args.reboot:
+        capabilities.append('reboot')
+
+    if args.capability:
+        capabilities += args.capability
+
+
+def execute_setup_script(command, fail_ok=False, print_stderr=True):
+    '''Run the --setup-script, if given.
+
+    Arguments passed after -- to the main program are passed verbatim to the
+    setup script.  The output of the script must be of the form key=value and
+    is parsed to populate sshconfig. Command line options always override the
+    values from the setup script.
+
+    :param command: Command to execute. The command must match a function in
+                    the ssh script
+    :param fail_ok: If True, failures will not cause bombing
+    :return: A tuple (return code, stdout, stderr). stdout and stderr may be
+             None, for example if the script fails and fail_ok is True.
+    '''
+    global sshconfig, args
+    out = None
+    err = None
+
+    if args.setup_script:
+        fpath = args.setup_script
+        if not os.path.isfile(fpath):
+            VirtSubproc.bomb('File not found: %s' % fpath)
+        elif not os.access(fpath, os.X_OK):
+            VirtSubproc.bomb('File is not executable: %s' % fpath)
+
+        if args.scriptargs and args.scriptargs[0] == '--':
+            del args.scriptargs[0]
+        cmd = [args.setup_script, command] + args.scriptargs
+        if args.login:
+            cmd += ['-l', args.login]
+        if sshconfig.get('extraopts'):
+            cmd += sshconfig['extraopts'].split(' ')
+
+        adtlog.debug('Executing setup script: %s' % ' '.join(cmd))
+        (status, out, err) = VirtSubproc.execute_timeout(
+            None,
+            1800,
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE)
+        if print_stderr:
+            # Keep outputting the error on stderr as well as capturing it
+            sys.stderr.write(err)
+        if status != 0:
+            err = 'setup script failed with code %i: %s' % (status,
+                                                            ' '.join(cmd))
+            if fail_ok:
+                adtlog.debug(err)
+                return (status, out, err)
+            else:
+                execute_setup_script('debug-failure', fail_ok=True)
+                VirtSubproc.bomb(err)
+
+        if command in ['open', 'revert']:
+            for k, v in dict([s.split('=', 1) for s in out.splitlines()
+                              if s and '=' in s]).items():
+                sshconfig[k] = v
+            adtlog.debug('got sshconfig from script %s: %s' % (command, sshconfig))
+
+    # Command line arguments take priority
+    for param in sshconfig:
+        a = getattr(args, param, None)
+        if a is not None:
+            sshconfig[param] = a
+
+    return (0, out, err)
+
+
+def host_setup(command):
+    '''Prepare remote host for ssh connection and return its configuration
+
+    When a --setup-script is passed, execute it and return its configuration.
+    The configuration of the remote side can be overloaded by options on the
+    command line.
+
+    command should either be "open" or "revert".
+
+    Sets the global sshcmd accordingly.
+    '''
+    global workdir, sshcmd
+
+    try:
+        if workdir is None:
+            workdir = tempfile.mkdtemp(prefix='autopkgtest-virt-ssh.')
+            os.chmod(workdir, 0o755)
+        execute_setup_script(command)
+        build_sshcmd()
+        wait_for_ssh(sshcmd, timeout=args.timeout_ssh)
+        build_auxverb()
+    except:
+        # Clean up on failure
+        hook_cleanup()
+        raise
+    adtlog.debug('host set up for %s; ssh command: %s' % (command, sshcmd))
+
+
+def build_sshcmd():
+    '''Generate sshcmd from sshconfig'''
+
+    global sshconfig, sshcmd, capabilities, workdir
+
+    sshcmd = ['ssh'] + (sshopts % workdir).split()
+    for param in sshconfig:
+        if not sshconfig[param]:
+            continue
+
+        if param == 'identity':
+            sshcmd += ['-i', sshconfig[param]]
+        elif param == 'login':
+            sshcmd += ['-l', sshconfig[param]]
+            if sshconfig[param] != 'root':
+                capabilities.append('suggested-normal-user=' + sshconfig[param])
+        elif param == 'port':
+            sshcmd += ['-p', sshconfig[param]]
+        elif param == 'options':
+            sshcmd += sshconfig[param].split()
+        elif param == 'hostname':
+            sshcmd += [sshconfig[param]]
+        elif param == 'capabilities':
+            capabilities += sshconfig[param].replace(',', ' ').split()
+            # Remove duplicates
+            capabilities = list(set(capabilities))
+        elif param == 'password':
+            if not args.password:
+                args.password = sshconfig[param]  # forward to can_sudo
+        elif param == 'extraopts':
+            # Do nothing but don't print a warning. It will be passed back as
+            # is to the ssh setup script
+            pass
+        else:
+            adtlog.warning('Ignoring invalid parameter: %s' % param)
+
+
+def wait_for_ssh(ssh_cmd, timeout=300):
+    '''Wait until testbed responds to ssh'''
+
+    cmd = ssh_cmd + ['/bin/true']
+    start = time.time()
+    elapsed = 0
+    delay = 3
+
+    while elapsed < timeout:
+        try:
+            rc = VirtSubproc.execute_timeout(None, 30, cmd)[0]
+            if rc == 0:
+                adtlog.debug('ssh connection established.')
+                break
+        except VirtSubproc.Timeout:
+            pass
+        adtlog.warning('ssh connection failed. Retrying in %d seconds...'
+                       % delay)
+        time.sleep(delay)
+        elapsed = time.time() - start
+    else:
+        execute_setup_script('debug-failure', fail_ok=True)
+        VirtSubproc.bomb('Timed out on waiting for ssh connection')
+
+
+def build_auxverb():
+    '''Generate auxverb from sshconfig'''
+
+    global sshconfig, sshcmd, capabilities, workdir
+
+    if sshconfig['login'] != 'root':
+        (sudocmd, askpass) = can_sudo(sshcmd)
+    else:
+        (sudocmd, askpass) = (None, None)
+    if sudocmd:
+        if 'root-on-testbed' not in capabilities:
+            capabilities.append('root-on-testbed')
+    else:
+        if 'root-on-testbed' in capabilities:
+            capabilities.remove('root-on-testbed')
+
+    extra_cmd = ''
+    if askpass:
+        extra_cmd += 'export SUDO_ASKPASS=%s\n' % askpass
+
+    # create remote wrapper
+    rc = VirtSubproc.execute_timeout(
+        terminal_kill_wrapper % extra_cmd, 30, sshcmd +
+        ['rm -f /tmp/autopkgtest-run-wrapper; set -C; cat > /tmp/autopkgtest-run-wrapper; chmod 755 /tmp/autopkgtest-run-wrapper'],
+        stdin=subprocess.PIPE)[0]
+    if rc != 0:
+        VirtSubproc.bomb('Failed to create /tmp/autopkgtest-run-wrapper')
+
+    # create local auxverb script
+    auxverb = os.path.join(workdir, 'runcmd')
+    with open(auxverb, 'w') as f:
+        f.write('''#!/bin/bash
+exec %s -- %s /tmp/autopkgtest-run-wrapper $(printf '%%q ' "${@%% }")
+''' % (" ".join(sshcmd), sudocmd or ''))
+    os.chmod(auxverb, 0o755)
+    VirtSubproc.auxverb = [auxverb]
+
+
+def can_sudo(ssh_cmd):
+    '''Determine if the user can sudo
+
+    :param ssh_cmd: ssh command to connect to the host
+    :returns: (sudo_command, askpass_path); (None, None) if user cannot sudo
+    '''
+    global cleanup_paths
+
+    sudocmd = None
+
+    # if we have a password, use that
+    if args.password:
+        cmd = 'F=`mktemp --tmpdir sudo_askpass.XXXX`;' \
+              '/bin/echo -e "#!/bin/sh\necho \'%s\'" > $F;' \
+              'chmod u+x $F; sync; echo $F' % args.password
+        askpass = VirtSubproc.check_exec(
+            ssh_cmd + ['/bin/sh', '-ec', pipes.quote(cmd)],
+            outp=True, timeout=30).strip()
+        adtlog.debug('created SUDO_ASKPASS from specified password')
+        cleanup_paths.append(askpass)
+
+        sudocmd = 'SUDO_ASKPASS=%s sudo -A' % askpass
+        cmd = ssh_cmd + ['--'] + sudocmd.split() + ['/bin/true']
+        (rc, _, err) = VirtSubproc.execute_timeout(None, 30, cmd,
+                                                   stderr=subprocess.PIPE)
+        if rc == 0:
+            if err:
+                VirtSubproc.bomb('sudo failed with stderr: "%s"' % err)
+            adtlog.debug('can_sudo: askpass works')
+            return (sudocmd, askpass)
+        else:
+            adtlog.warning('specified sudo password fails, no root available')
+            pass
+
+    # otherwise, test if we can do it without password (NOPASSWD sudo option)
+    sudocmd = "sudo -n"
+    cmd = ssh_cmd + ['--'] + sudocmd.split() + ['/bin/true']
+    (rc, _, err) = VirtSubproc.execute_timeout(None, 30, cmd,
+                                               stderr=subprocess.PIPE)
+    if rc == 0:
+        if err:
+            VirtSubproc.bomb('sudo failed with stderr: "%s"' % err)
+        adtlog.debug('can_sudo: sudo without password works')
+        return (sudocmd, None)
+    else:
+        adtlog.debug('can_sudo: sudo without password does not work')
+
+    return (None, None)
+
+
+def hook_debug_fail():
+    # Don't print stderr; if we're being called for the hook, we assume the
+    # caller is going to do that.
+    (status, out, err) = execute_setup_script('debug-failure',
+                                              fail_ok=True,
+                                              print_stderr=False)
+    return err
+
+
+def hook_open():
+    host_setup('open')
+
+
+def hook_downtmp(path):
+    return VirtSubproc.downtmp_mktemp(path)
+
+
+def hook_revert():
+    host_setup('revert')
+
+
+def wait_port_down(host, port, timeout):
+    '''Wait until host:port stops responding'''
+
+    VirtSubproc.timeout_start(timeout)
+    while True:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            res = s.connect_ex((host, port))
+            adtlog.debug('wait_port_down() connect: %s' % os.strerror(res))
+            if res != 0:
+                break
+            # connect might succeed with port forwarding (e. g. QEMU)
+            try:
+                r = s.recv(1, socket.MSG_WAITALL)
+                adtlog.debug('wait_port_down() recv: "%s"' % str(r))
+                if not r:
+                    break
+            except OSError:
+                break
+            time.sleep(0.1)
+        finally:
+            s.close()
+    VirtSubproc.timeout_stop()
+
+
+def hook_wait_reboot():
+    global sshcmd
+
+    if args.setup_script:
+        (rc, _, _) = execute_setup_script('wait-reboot', fail_ok=True)
+    else:
+        # if we don't have a setup script, use the fallback below
+        rc = 1
+
+    if rc != 0:
+        adtlog.debug('setup script wait-reboot failed, waiting for ssh to go down...')
+        VirtSubproc.execute_timeout(None, 10, sshcmd + ['-O', 'exit'])
+        # wait for ssh/the machine to go down; we can't just call ssh sleep
+        # for this, this often hangs when sshd is being shut down
+        if sshconfig['port'] is not None:
+            port = int(sshconfig['port'])
+        else:
+            port = 22
+        try:
+            wait_port_down(sshconfig['hostname'], port, 300)
+        except VirtSubproc.Timeout:
+            execute_setup_script('debug-failure', fail_ok=True)
+            VirtSubproc.bomb('timed out waiting for testbed to reboot')
+
+    build_sshcmd()
+    wait_for_ssh(sshcmd, timeout=args.timeout_ssh)
+    build_auxverb()
+
+
+def hook_cleanup():
+    global capabilities, workdir, cleanup_paths, sshcmd
+
+    try:
+        VirtSubproc.downtmp_remove()
+        if cleanup_paths:
+            VirtSubproc.check_exec(['rm', '-rf'] + cleanup_paths, downp=True,
+                                   timeout=VirtSubproc.copy_timeout)
+    except VirtSubproc.Timeout:
+        adtlog.error('Removing temporary files on testbed timed out')
+        # still do the remaining cleanup
+
+    execute_setup_script('cleanup')
+
+    capabilities = [c for c in capabilities if not c.startswith('downtmp-host')]
+
+    # terminate ssh connection muxer; it inherits our stderr (which causes an
+    # eternal hang of tee processes), and we are going to remove the socket dir
+    # anyway
+    if sshcmd:
+        VirtSubproc.execute_timeout(None, 10, sshcmd + ['-O', 'exit'])
+
+    if workdir:
+        shutil.rmtree(workdir, ignore_errors=True)
+        workdir = None
+
+
+def hook_capabilities():
+    return capabilities
+
+
+parse_args()
+VirtSubproc.main()

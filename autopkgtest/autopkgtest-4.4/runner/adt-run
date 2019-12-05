@@ -1,0 +1,687 @@
+#!/usr/bin/python3 -u
+#
+# autopkgtest is a tool for testing Debian binary packages
+#
+# autopkgtest is Copyright (C) 2006-2016 Canonical Ltd.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+#
+# See the file CREDITS for a full list of credits information (often
+# installed as /usr/share/doc/autopkgtest/CREDITS).
+
+import signal
+import tempfile
+import sys
+import subprocess
+import traceback
+import re
+import os
+import shutil
+import atexit
+import json
+import pipes
+
+from debian import deb822
+
+# support running out of git and from packaged install
+our_base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if os.path.isdir(os.path.join(our_base, 'virt')):
+    sys.path.insert(0, os.path.join(our_base, 'lib'))
+    vserver_dir = os.path.join(our_base, 'virt')
+    os.environ['PATH'] = vserver_dir + ':' + os.environ.get('PATH', '')
+else:
+    sys.path.insert(0, '/usr/share/autopkgtest/lib')
+
+import adtlog
+import testdesc
+import adt_testbed
+import adt_binaries
+
+if os.path.basename(sys.argv[0]) == 'adt-run':
+    # legacy CLI
+    from adt_run_args import parse_args
+    adtlog.warning('"adt-run" is deprecated, please use "autopkgtest" (see manpage)')
+    legacy_cli = True
+else:
+    from autopkgtest_args import parse_args
+    legacy_cli = False
+
+# ---------- global variables
+
+tmp = None		# pathstring on host
+testbed = None		# Testbed
+opts = None             # argparse options
+actions = None          # list of (action_type, path)
+errorcode = 0		# exit status that we are going to use
+binaries = None		# DebBinaries (.debs we have registered)
+blamed = []
+
+
+# ---------- convenience functions
+
+def files_from_dsc(dsc_path):
+    '''Get files from a .dsc or a .changes
+
+    Return list of files, including the directory of dsc_path.
+    '''
+    try:
+        files = testdesc.parse_rfc822(dsc_path).__next__()['Files'].split()
+    except (StopIteration, KeyError):
+        adtlog.badpkg('%s is invalid and does not contain Files:' % dsc_path)
+
+    dsc_dir = os.path.dirname(dsc_path)
+
+    return [os.path.join(dsc_dir, f) for f in files if '.' in f and '_' in f]
+
+
+def blame(m):
+    global blamed
+    adtlog.debug('blame += %s' % m)
+    blamed.append(m)
+
+
+def setup_trace():
+    global tmp
+
+    if opts.output_dir is not None:
+        os.makedirs(opts.output_dir, exist_ok=True)
+        if os.listdir(opts.output_dir):
+            adtlog.bomb('--output-dir "%s" is not empty' % opts.output_dir)
+        tmp = opts.output_dir
+    else:
+        assert(tmp is None)
+        tmp = tempfile.mkdtemp(prefix='autopkgtest.output.')
+        os.chmod(tmp, 0o755)
+
+    if opts.logfile is None and opts.output_dir is not None:
+        opts.logfile = opts.output_dir + '/log'
+
+    if opts.logfile is not None:
+        # tee stdout/err into log file
+        (fd, fifo_log) = tempfile.mkstemp(prefix='adt-fifo-log.')
+        os.close(fd)
+        os.unlink(fifo_log)
+        os.mkfifo(fifo_log)
+        atexit.register(os.unlink, fifo_log)
+        out_tee = subprocess.Popen(['tee', fifo_log],
+                                   stdin=subprocess.PIPE)
+        err_tee = subprocess.Popen(['tee', fifo_log, '-a', '/dev/stderr'],
+                                   stdin=subprocess.PIPE,
+                                   stdout=open('/dev/null', 'wb'))
+        log_cat = subprocess.Popen(['cat', fifo_log], stdout=open(opts.logfile, 'wb'))
+        adtlog.enable_colors = False
+        os.dup2(out_tee.stdin.fileno(), sys.stdout.fileno())
+        os.dup2(err_tee.stdin.fileno(), sys.stderr.fileno())
+
+        def cleanup():
+            os.close(sys.stdout.fileno())
+            os.close(out_tee.stdin.fileno())
+            out_tee.wait()
+            os.close(sys.stderr.fileno())
+            os.close(err_tee.stdin.fileno())
+            err_tee.wait()
+            log_cat.wait()
+
+        atexit.register(cleanup)
+
+    if opts.summary is not None:
+        adtlog.summary_stream = open(opts.summary, 'w+b', 0)
+    else:
+        adtlog.summary_stream = open(os.path.join(tmp, 'summary'), 'w+b', 0)
+
+
+def run_tests(tests, tree):
+    global errorcode, testbed
+
+    if not tests:
+        # if we have skipped tests, don't claim that we don't have any
+        if not errorcode & 2:
+            adtlog.report('*', 'SKIP no tests in this package')
+            errorcode |= 8
+        return
+
+    for t in tests:
+        # Set up clean test bed with given dependencies
+        adtlog.info('test %s: preparing testbed' % t.name)
+        testbed.reset(t.depends, 'needs-recommends' in t.restrictions)
+        binaries.publish()
+        testbed.install_deps(t.depends, 'needs-recommends' in t.restrictions, opts.shell_fail)
+
+        testbed.run_test(tree, t, opts.env, opts.shell_fail, opts.shell,
+                         opts.build_parallel)
+        if not t.result:
+            errorcode |= 4
+        if 'breaks-testbed' in t.restrictions:
+            testbed.needs_reset()
+
+    testbed.needs_reset()
+
+
+def create_testinfo(vserver_args):
+    global testbed
+
+    info = {'virt_server': ' '.join([pipes.quote(w) for w in vserver_args])}
+
+    if testbed.initial_kernel_version:
+        info['kernel_version'] = testbed.initial_kernel_version
+    if testbed.test_kernel_versions:
+        info['test_kernel_versions'] = testbed.test_kernel_versions
+    if opts.env:
+        info['custom_environment'] = opts.env
+    if testbed.nproc:
+        info['nproc'] = testbed.nproc
+    if testbed.cpu_model:
+        info['cpu_model'] = testbed.cpu_model
+    if testbed.cpu_flags:
+        info['cpu_flags'] = testbed.cpu_flags
+
+    with open(os.path.join(tmp, 'testinfo.json'), 'w') as f:
+        json.dump(info, f, indent=2)
+
+
+def print_exception(ei, msgprefix=''):
+    if msgprefix:
+        adtlog.error(msgprefix)
+    (et, e, tb) = ei
+    if et is adtlog.BadPackageError:
+        adtlog.preport('blame: ' + ' '.join(blamed))
+        adtlog.preport('badpkg: ' + e.args[0])
+        adtlog.error('erroneous package: ' + e.args[0])
+        adtlog.psummary('erroneous package: ' + e.args[0])
+        return 12
+    elif et is adtlog.TestbedFailure:
+        adtlog.error('testbed failure: ' + e.args[0])
+        adtlog.psummary('testbed failure: ' + e.args[0])
+        return 16
+    elif et is adtlog.AutopkgtestError:
+        adtlog.psummary(e.args[0])
+        adtlog.error(e.args[0])
+        return 20
+    else:
+        adtlog.error('unexpected error:')
+        adtlog.psummary('quitting: unexpected error, see log')
+        traceback.print_exc(None, sys.stderr)
+        return 20
+
+
+def cleanup():
+    try:
+        if testbed is not None:
+            if binaries is not None:
+                binaries.reset()
+            testbed.stop()
+        if opts.output_dir is None and tmp is not None:
+            shutil.rmtree(tmp, ignore_errors=True)
+    except:
+        print_exception(sys.exc_info(),
+                        '%s\n: error cleaning up:\n' % os.path.basename(sys.argv[0]))
+        sys.exit(20)
+
+
+def signal_handler(signum, frame):
+    adtlog.error('Received signal %i, cleaning up...' % signum)
+    signal.signal(signum, signal.SIG_DFL)
+    try:
+        # don't call cleanup() here, resetting apt takes too long
+        if testbed:
+            testbed.stop()
+    finally:
+        os.kill(os.getpid(), signum)
+
+
+# ---------- processing of sources (building)
+
+
+def deb_package_name(deb):
+    '''Return package name from a .deb'''
+
+    try:
+        return subprocess.check_output(['dpkg-deb', '--field', deb, 'Package'],
+                                       universal_newlines=True).strip()
+    except subprocess.CalledProcessError as e:
+        adtlog.badpkg('failed to parse binary package: %s' % e)
+
+
+def source_rules_command(script, which, cwd=None, results_lines=0):
+    if cwd is None:
+        cwd = '/'
+
+    # there's no way to tell su to not reset $PATH, for install-tmp mode
+    if testbed.install_tmp_env:
+        for e in testbed.install_tmp_env:
+            if e.startswith('PATH='):
+                script = ['export ' + e] + script
+                break
+
+    if adtlog.verbosity > 1:
+        script = ['exec 3>&1 >&2', 'set -x', 'cd ' + cwd] + script
+    else:
+        script = ['exec 3>&1 >&2', 'cd ' + cwd] + script
+    script = '; '.join(script)
+
+    # run command as user, if available
+    if testbed.user and 'root-on-testbed' in testbed.caps:
+        script = "su --shell=/bin/sh %s -c 'set -e; %s'" % (testbed.user, script)
+
+    (rc, out, _) = testbed.execute(['sh', '-ec', script],
+                                   stdout=subprocess.PIPE,
+                                   xenv=opts.env,
+                                   kind='build')
+    results = out.rstrip('\n').splitlines()
+    if rc:
+        if opts.shell_fail:
+            testbed.run_shell()
+        if rc == 100:
+            testbed.bomb('rules %s failed with exit code %d (apt failure)' % (which, rc))
+        else:
+            adtlog.badpkg('rules %s failed with exit code %d' % (which, rc))
+    if results_lines is not None and len(results) != results_lines:
+        adtlog.badpkg('got %d lines of results from %s where %d expected: %r'
+                      % (len(results), which, results_lines, results))
+    if results_lines == 1:
+        return results[0]
+    return results
+
+
+def build_source(kind, arg, built_binaries):
+    '''Prepare action argument for testing
+
+    This builds packages when necessary and registers their binaries, copies
+    tests into the testbed, etc.
+
+    Return a adt_testbed.Path to the unpacked tests tree.
+    '''
+    blame(arg)
+    testbed.reset([], testbed.recommends_installed)
+
+    def debug_b(m):
+        adtlog.debug('build_source: <%s:%s> %s' % (kind, arg, m))
+
+    # copy necessary source files into testbed and set create_command for final unpacking
+    if kind == 'source':
+        dsc = arg
+        dsc_tb = os.path.join(testbed.scratch, os.path.basename(dsc))
+
+        # copy .dsc file itself
+        adt_testbed.Path(testbed, dsc, dsc_tb).copydown()
+        # copy files from it
+        for part in files_from_dsc(dsc):
+            p = adt_testbed.Path(testbed, part, os.path.join(testbed.scratch, os.path.basename(part)))
+            p.copydown()
+
+        create_command = 'dpkg-source -x "%s"' % dsc_tb
+
+    elif kind == 'unbuilt-tree':
+        dsc = os.path.join(tmp, 'fake.dsc')
+        with open(dsc, 'w', encoding='UTF-8') as f_dsc:
+            with open(os.path.join(arg, 'debian/control'), encoding='UTF-8') as f_control:
+                for line in f_control:
+                    if line == '\n':
+                        break
+                    f_dsc.write(line)
+            f_dsc.write('Binary: none-so-this-is-not-a-package-name\n')
+        atexit.register(lambda f: os.path.exists(f) and os.unlink(f), dsc)
+
+        # copy unbuilt tree into testbed
+        ubtree = adt_testbed.Path(testbed, arg,
+                                  os.path.join(testbed.scratch, 'ubtree-' + os.path.basename(arg)))
+        ubtree.copydown()
+        create_command = 'cp -rd --preserve=timestamps -- "%s" real-tree' % ubtree.tb
+        create_command += '; [ -x real-tree/debian/rules ] && dpkg-source --before-build real-tree'
+
+    elif kind == 'built-tree':
+        # this is a special case: we don't want to build, or even copy down
+        # (and back up) the tree here for efficiency; so shortcut everything
+        # below and just set the tests_tree and get the package version
+        tests_tree = adt_testbed.Path(testbed, arg, os.path.join(testbed.scratch, 'tree'), is_dir=True)
+
+        changelog = os.path.join(arg, 'debian', 'changelog')
+        if os.path.exists(changelog):
+            with open(changelog, 'rb') as f:
+                (testpkg_name, testpkg_version, _) = f.readline().decode().split(' ', 2)
+                testpkg_version = testpkg_version[1:-1]  # chop off parentheses
+
+            adtlog.info('testing package %s version %s' % (testpkg_name, testpkg_version))
+            if opts.output_dir:
+                with open(os.path.join(tmp, 'testpkg-version'), 'w') as f:
+                    f.write('%s %s\n' % (testpkg_name, testpkg_version))
+        return tests_tree
+
+    elif kind == 'apt-source':
+        # determine the version for "apt-get source pkg=version" that conforms
+        # to the current apt pinning, to work around the lack of
+        # "apt-get source foo/release". We only consider binaries which are
+        # shipped in all available versions, otherwise new binaries in pockets
+        # would always win. However, if the same source ships non-overlapping
+        # sets of binaries in both pockets, use the newer ones.
+        #
+        # apt-get source is terribly noisy; only show what gets downloaded
+        #
+        # apt in Ubuntu 12.04 does not yet understand --only-source, so add a fallback
+        #
+        # very old source packages don't have Package-List: yet, fall back to Binary:
+        # (Binary: is generally not sufficient as it gets truncated for long lists)
+        create_command = ('pkgs=$(apt-cache showsrc --only-source %(src)s || [ $? != 100 ] || apt-cache showsrc %(src)s); '
+                          'pkgs=$(echo "$pkgs\n" | awk "/^Package: / { if (\$2 != \\"%(src)s\\") { skippar=1; next; } else { skippar=0}} { if (skippar) next; }    /^Binary:/ { sub(/^Binary:/, \\"\\"); gsub(/,/, \\"\\"); split(\$0,oldpkgs)}; /^Package-List:/ { inlist=1; have_pl=1; delete thissrc; if (\$2) thissrc[\$2] = 1; next } (/^ / && inlist == 1) { thissrc[\$1] = 1; next } { if (!inlist) next; inlist=0; if (intersect) {for (p in pkgs) { if (!(p in thissrc)) delete pkgs[p]; else remaining=1}; if (!remaining) {for (p in thissrc) {pkgs[p] = 1}} } else { for (p in thissrc) { pkgs[p] = 1}; intersect=1 } } END {if (have_pl) { for (p in pkgs) print p } else {for (p in oldpkgs) print oldpkgs[p]} }");'
+                          ' [ -n "$pkgs" ] || exit 1; '
+                          ' for pkg in $pkgs; do'
+                          '  pkg_candidate=$(apt-cache policy "^$(echo $pkg | sed -r "s/([.+])/\\\\\1/g")\$"|sed -n "/Candidate:/ { s/^.* //; /none/d; p}") || continue;'
+                          '  [ -n "$pkg_candidate" ] || continue; '
+                          '  show=$(apt-cache show $pkg=$pkg_candidate | grep "^Source:" || true);'
+                          '  [ "$pkg" = "%(src)s" ] || echo "$show" | grep -q "^Source: %(src)s\\b" || continue; '
+                          '  srcversion=$(echo "$show" | sed -n "/^Source: .*(.*)/ { s/^.*(//; s/)\$//; p}");'
+                          '  ver=${srcversion:-$pkg_candidate};'
+                          '  dpkg --compare-versions "$ver" lt "$maxver" || maxver="$ver";'
+                          'done;'
+                          '[ -z "$maxver" ] || maxver="=$maxver";'
+                          'OUT=$(apt-get source -q --only-source %(src)s$maxver 2>&1) || RC=$?;'
+                          'if [ -n "$RC" ]; then if echo "$OUT" | grep -q "Unable to find a source package"; then exit 1; else exit $RC; fi; fi;'
+                          'echo "$OUT" | grep ^Get: || true' % {'src': arg})
+    elif kind == 'git-source':
+        url, _, branch = arg.partition('#')
+        create_command = "git clone '%s' || { sleep 15; git clone '%s'; }" % (url, url)
+        if branch:
+            # This is url#branch or url#refspec (for pull requests)
+            create_command += "; (cd [a-z0-9]*; git fetch -fu origin '%s:testbranch' || { sleep 15; git fetch -fu origin '%s:testbranch'; }; git checkout testbranch)" % (branch, branch)
+
+        testbed.satisfy_dependencies_string('git, ca-certificates', 'install git for --git-source')
+    else:
+        adtlog.bomb('unknown action kind for build_source: ' + kind)
+
+    if kind in ['source', 'apt-source', 'unbuilt-tree']:
+        testbed.install_deps([], False)
+        if testbed.execute(['which', 'dpkg-source'],
+                           stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE)[0] != 0:
+            adtlog.debug('dpkg-source not available in testbed, installing dpkg-dev')
+            # Install dpkg-source for unpacking .dsc
+            testbed.satisfy_dependencies_string('dpkg-dev',
+                                                'install dpkg-dev')
+
+    # run create_command
+    script = [
+        'builddir=$(mktemp -d %s/build.XXX)' % testbed.scratch,
+        'cd $builddir',
+        create_command,
+        'chmod -R a+rX .',
+        'cd [a-z0-9]*/.',
+        'pwd >&3',
+        'sed -n "1 {s/).*//; s/ (/\\n/; p}" debian/changelog >&3',
+        'set +e; grep -q "^Restrictions:.*\\bbuild-needed\\b" debian/tests/control 2>/dev/null; echo $? >&3'
+    ]
+
+    (result_pwd, testpkg_name, testpkg_version, build_needed_rc) = \
+        source_rules_command(script, 'extract', results_lines=4)
+
+    # record tested package version
+    adtlog.info('testing package %s version %s' % (testpkg_name, testpkg_version))
+    if opts.output_dir:
+        with open(os.path.join(tmp, 'testpkg-version'), 'w') as f:
+            f.write('%s %s\n' % (testpkg_name, testpkg_version))
+
+    # For optional builds:
+    #
+    # We might need to build the package because:
+    #   - we want its binaries
+    #   - the test control file says so (assuming we have any tests)
+
+    build_needed = False
+    if built_binaries:
+        adtlog.info('build needed for binaries')
+        build_needed = True
+    elif build_needed_rc == '0':
+        adtlog.info('build needed for tests')
+        build_needed = True
+    else:
+        adtlog.info('build not needed')
+
+    if build_needed:
+        testbed.needs_reset()
+        if kind not in ['dsc', 'apt-source']:
+            testbed.install_deps([], False)
+
+        if kind in ('apt-source', 'git-source'):
+            # we need to get the downloaded debian/control from the testbed, so
+            # that we can avoid calling "apt-get build-dep" and thus
+            # introducing a second mechanism for installing build deps
+            pkg_control = adt_testbed.Path(testbed,
+                                           os.path.join(tmp, 'apt-control'),
+                                           os.path.join(result_pwd, 'debian/control'), False)
+            pkg_control.copyup()
+            dsc = pkg_control.host
+
+        with open(dsc, encoding='UTF-8') as f:
+            d = deb822.Deb822(sequence=f)
+            bd = d.get('Build-Depends', '')
+            bdi = d.get('Build-Depends-Indep', '')
+
+        # determine build command and build-essential packages
+        build_essential = ['build-essential']
+        assert testbed.nproc
+        dpkg_buildpackage = 'DEB_BUILD_OPTIONS="parallel=%s $DEB_BUILD_OPTIONS" dpkg-buildpackage -us -uc -b' % (
+            opts.build_parallel or testbed.nproc)
+        if opts.gainroot:
+            dpkg_buildpackage += ' -r' + opts.gainroot
+        else:
+            if testbed.user or 'root-on-testbed' not in testbed.caps:
+                build_essential += ['fakeroot']
+
+        testbed.satisfy_dependencies_string(bd + ', ' + bdi + ', ' + ', '.join(build_essential), arg,
+                                            build_dep=True, shell_on_failure=opts.shell_fail)
+
+        # keep patches applied for tests
+        source_rules_command([dpkg_buildpackage, 'dpkg-source --before-build .'], 'build', cwd=result_pwd)
+
+    # copy built tree from testbed to hosts
+    tests_tree = adt_testbed.Path(testbed, os.path.join(tmp, 'tests-tree'), result_pwd, is_dir=True)
+    atexit.register(shutil.rmtree, tests_tree.host, ignore_errors=True)
+    tests_tree.copyup()
+
+    if not build_needed:
+        return tests_tree
+
+    if built_binaries:
+        debug_b('want built binaries, getting and registering built debs')
+        result_debs = testbed.check_exec(['sh', '-ec', 'cd "%s"; echo *.deb' %
+                                          os.path.dirname(result_pwd)], stdout=True).strip()
+        if result_debs == '*.deb':
+            debs = []
+        else:
+            debs = result_debs.split()
+        debug_b('debs=' + repr(debs))
+
+        # determine built debs and copy them from testbed
+        deb_re = re.compile('^([-+.0-9a-z]+)_[^_/]+(?:_[^_/]+)\.deb$')
+        for deb in debs:
+            m = deb_re.match(deb)
+            if not m:
+                adtlog.badpkg("badly-named binary `%s'" % deb)
+            pkgname = m.groups()[0]
+            debug_b(' deb=%s, pkgname=%s' % (deb, pkgname))
+            deb_path = adt_testbed.Path(testbed,
+                                        os.path.join(tmp, os.path.basename(deb)),
+                                        os.path.join(result_pwd, '..', deb),
+                                        False)
+            deb_path.copyup()
+            binaries.register(deb_path.host, pkgname)
+        debug_b('got all built binaries')
+
+    return tests_tree
+
+
+def process_actions():
+    global actions, binaries, errorcode
+
+    binaries = adt_binaries.DebBinaries(testbed, tmp)
+    if legacy_cli:
+        control_override = None
+        testname = None
+    else:
+        if opts.override_control and not os.access(opts.override_control, os.R_OK):
+            adtlog.bomb('cannot read ' + opts.override_control)
+        control_override = opts.override_control
+        testname = opts.testname
+    pending_click_source = None
+    tests_tree = None
+    no_run_tests = False
+
+    for (kind, arg, built_binaries) in actions:
+        # non-tests/build actions
+        if kind == 'override-control':
+            control_override = arg
+            if not os.access(control_override, os.R_OK):
+                adtlog.bomb('cannot read ' + control_override)
+            continue
+        if kind == 'testname':
+            testname = arg
+            continue
+        if kind == 'binary':
+            blame('arg:' + arg)
+            pkg = deb_package_name(arg)
+            blame('deb:' + pkg)
+            binaries.register(arg, pkg)
+            continue
+        if kind == 'click-source':
+            if pending_click_source:
+                adtlog.warning('Ignoring --click-source %s, no subsequent --click argument' % pending_click_source)
+            pending_click_source = arg
+            continue
+
+        # tests/build actions
+        assert kind in ('source', 'unbuilt-tree', 'built-tree', 'apt-source',
+                        'git-source', 'click')
+        adtlog.info('@@@@@@@@@@@@@@@@@@@@ %s %s' % (kind, arg))
+
+        # remove tests tree from previous action
+        if tests_tree and tests_tree.tb:
+            adtlog.debug('cleaning up previous tests tree %s on testbed' % tests_tree.tb)
+            testbed.execute(['rm', '-rf', tests_tree.tb])
+
+        if kind == 'click':
+            if control_override:
+                # locally specified manifest
+                with open(control_override) as f:
+                    manifest = f.read()
+                clicks = []
+                use_installed = False
+                if os.path.exists(arg):
+                    clicks.append(arg)
+                    use_installed = True
+                (srcdir, tests, skipped) = testdesc.parse_click_manifest(
+                    manifest, testbed.caps, clicks, use_installed, pending_click_source)
+
+            elif os.path.exists(arg):
+                # local .click package file
+                (srcdir, tests, skipped) = testdesc.parse_click(
+                    arg, testbed.caps, srcdir=pending_click_source)
+            else:
+                # already installed click package name
+                if testbed.user:
+                    u = ['--user', testbed.user]
+                else:
+                    u = []
+                manifest = testbed.check_exec(['click', 'info'] + u + [arg], stdout=True)
+                (srcdir, tests, skipped) = testdesc.parse_click_manifest(
+                    manifest, testbed.caps, [], True, pending_click_source)
+
+            if not srcdir:
+                adtlog.bomb('No click source available for %s' % arg)
+
+            tests_tree = adt_testbed.Path(
+                testbed, srcdir, os.path.join(testbed.scratch, 'tree'),
+                is_dir=True)
+            pending_click_source = None
+        else:
+            tests_tree = build_source(kind, arg, built_binaries)
+            if kind == 'unbuilt-tree':
+                new_tree = adt_testbed.Path(tests_tree.testbed,
+                                            arg,
+                                            tests_tree.tb,
+                                            True)
+                new_tree_parent = adt_testbed.Path(tests_tree.testbed,
+                                                   arg + "/..",
+                                                   tests_tree.tb + "/..",
+                                                   True)
+                new_tree.copyup_rec(check_existing=True, rec_level=-1)
+                new_tree_parent.copyup_rec(check_existing=True, rec_level=1)
+                no_run_tests = True
+            try:
+                (tests, skipped) = testdesc.parse_debian_source(
+                    tests_tree.host, testbed.caps, testbed.dpkg_arch,
+                    control_path=control_override,
+                    auto_control=opts.auto_control)
+            except testdesc.InvalidControl as e:
+                adtlog.badpkg(str(e))
+
+        if skipped:
+            errorcode |= 2
+
+        if testname:
+            adtlog.debug('filtering testname %s for package %s %s' %
+                         (testname, kind, arg))
+            tests = [t for t in tests if t.name == testname]
+            if not tests:
+                adtlog.error('%s %s has no test matching --test-name %s' %
+                             (kind, arg, testname))
+                # error code will be set later
+            testname = None
+
+        control_override = None
+        if not no_run_tests:
+            run_tests(tests, tests_tree)
+            adtlog.summary_stream.flush()
+            if adtlog.verbosity >= 1:
+                adtlog.summary_stream.seek(0)
+                adtlog.info('@@@@@@@@@@@@@@@@@@@@ summary')
+                sys.stderr.buffer.write(adtlog.summary_stream.read())
+
+    adtlog.summary_stream.close()
+    adtlog.summary_stream = None
+
+
+def main():
+    global testbed, opts, actions, errorcode
+    try:
+        (opts, actions, vserver_args) = parse_args()
+    except SystemExit:
+        # argparser exits with error 2 by default, but we have a different
+        # meaning for that already
+        sys.exit(20)
+
+    # ensure proper cleanup on signals
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGQUIT, signal_handler)
+
+    try:
+        setup_trace()
+        testbed = adt_testbed.Testbed(vserver_argv=vserver_args,
+                                      output_dir=tmp,
+                                      user=opts.user,
+                                      setup_commands=opts.setup_commands,
+                                      setup_commands_boot=opts.setup_commands_boot,
+                                      add_apt_pockets=opts.apt_pocket,
+                                      copy_files=opts.copy)
+        testbed.start()
+        testbed.open()
+        process_actions()
+    except:
+        errorcode = print_exception(sys.exc_info(), '')
+    if tmp:
+        create_testinfo(vserver_args)
+    cleanup()
+    sys.exit(errorcode)
+
+
+main()

@@ -1,0 +1,330 @@
+#!/usr/bin/python3
+#
+# autopkgtest-virt-lxc is part of autopkgtest
+# autopkgtest is a tool for testing Debian binary packages
+#
+# autopkgtest is Copyright (C) 2006-2014 Canonical Ltd.
+#
+# autopkgtest-virt-lxc was derived from autopkgtest-schroot and modified to suit LXC
+# by Robie Basak <robie.basak@canonical.com>.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+#
+# See the file CREDITS for a full list of credits information (often
+# installed as /usr/share/doc/autopkgtest/CREDITS).
+
+import sys
+import os
+import string
+import random
+import subprocess
+import time
+import tempfile
+import shutil
+import argparse
+
+sys.path.insert(0, '/usr/share/autopkgtest/lib')
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), 'lib'))
+
+import VirtSubproc
+import adtlog
+
+
+capabilities = ['revert', 'revert-full-system', 'root-on-testbed',
+                'isolation-container']
+
+args = None
+lxc_container_name = None
+normal_user = None
+shared_dir = None
+
+
+def parse_args():
+    global args
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-d', '--debug', action='store_true',
+                        help='Enable debugging output')
+    parser.add_argument('-e', '--ephemeral', action='store_true',
+                        help='Use ephemeral overlays instead of cloning (much '
+                        'faster, but does not support reboot and might cause '
+                        'errors in some corner cases)')
+    parser.add_argument('-s', '--sudo', action='store_true',
+                        help='Run lxc-* commands with sudo; use if you run '
+                        'autopkgtest as normal user')
+    parser.add_argument('--name', help='container name (autopkgtest-lxc-XXXXXX by default)')
+    parser.add_argument('template', help='LXC container name that will be '
+                        'used as a template')
+    parser.add_argument('lxcargs', nargs=argparse.REMAINDER,
+                        help='Additional arguments to pass to lxc-start ')
+    args = parser.parse_args()
+    if args.debug:
+        adtlog.verbosity = 2
+
+
+def sudoify(command, timeout=None):
+    '''Prepend sudo to command with the --sudo option'''
+
+    if args.sudo:
+        if timeout:
+            return ['sudo', 'timeout', str(timeout)] + command
+        else:
+            return ['sudo'] + command
+    else:
+        return command
+
+
+def get_available_lxc_container_name():
+    '''Return an LXC container name that isn't already taken.
+
+    There is a race condition between returning this name and creation of
+    the container. Ideally lxc-start-ephemeral would generate a name in a
+    race free way and return the name used in machine-readable way, so that
+    this function would not be necessary. See LP: #1197754.
+    '''
+    while True:
+        # generate random container name
+        rnd = [random.choice(string.ascii_lowercase) for i in range(6)]
+        candidate = 'autopkgtest-lxc-' + ''.join(rnd)
+
+        containers = VirtSubproc.check_exec(sudoify(['lxc-ls']), outp=True,
+                                            timeout=10)
+        if candidate not in containers:
+            return candidate
+
+
+def wait_booted(lxc_name):
+    '''Wait until the container has sufficiently booted to interact with it
+
+    Do this by checking that the runlevel is someting numeric, i. e. not
+    "unknown" or "S".
+    '''
+    timeout = 60
+    while timeout > 0:
+        timeout -= 1
+        time.sleep(1)
+        (rc, out, _) = VirtSubproc.execute_timeout(
+            None, 10, sudoify(['lxc-attach', '--name', lxc_name, 'runlevel']),
+            stdout=subprocess.PIPE)
+        if rc != 0:
+            adtlog.debug('wait_booted: lxc-attach failed, retrying...')
+            continue
+        out = out.strip()
+        if out.split()[-1].isdigit():
+            return
+
+        adtlog.debug('wait_booted: runlevel "%s", retrying...' % out)
+
+    VirtSubproc.bomb('timed out waiting for container %s to start; '
+                     'last runlevel "%s"' % (lxc_name, out))
+
+
+def determine_normal_user(lxc_name):
+    '''Check for a normal user to run tests as.'''
+
+    global capabilities, normal_user
+
+    # get the first UID >= 500
+    cmd = ['lxc-attach', '--name', lxc_name, '--', 'sh', '-c',
+           'getent passwd | sort -t: -nk3 | '
+           "awk -F: '{if ($3 >= 500) { print $1; exit } }'"]
+    out = VirtSubproc.execute_timeout(None, 10, sudoify(cmd),
+                                      stdout=subprocess.PIPE)[1].strip()
+    if out:
+        normal_user = out
+        capabilities.append('suggested-normal-user=' + normal_user)
+        adtlog.debug('determine_normal_user: got user "%s"' % normal_user)
+    else:
+        adtlog.debug('determine_normal_user: no uid >= 500 available')
+
+
+def start_lxc1():
+    if args.ephemeral:
+        argv = ['lxc-start-ephemeral', '--name', lxc_container_name, '--daemon']
+        if shared_dir:
+            argv += ['--bdir', shared_dir]
+        argv += ['--orig', args.template] + args.lxcargs
+        rc = VirtSubproc.execute_timeout(None, 310, sudoify(argv, 300),
+                                         stdout=subprocess.DEVNULL)[0]
+        if rc != 0:
+            VirtSubproc.bomb('lxc-start-ephemeral failed with exit status %i' % rc)
+        # work around https://launchpad.net/bugs/1367730
+        VirtSubproc.check_exec(sudoify([
+            'lxc-attach', '--name', lxc_container_name, '--', 'chmod', 'go+rx', '/']),
+            timeout=30)
+    else:
+        # lxc-clone should pick -B by itself (LP: #1532125)
+        argv = sudoify(['lxc-clone', '--new', lxc_container_name, '--orig', args.template])
+        if VirtSubproc.execute_timeout(None, 10, argv + ['-B', 'btrfs'],
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)[0] != 0:
+            adtlog.debug('lxc-clone with btrfs backingstore failed, re-trying without')
+            rc = VirtSubproc.execute_timeout(None, 600, argv, stdout=subprocess.DEVNULL)[0]
+            if rc != 0:
+                VirtSubproc.bomb('lxc-clone failed with exit status %i' % rc)
+        argv = ['lxc-start', '--name', lxc_container_name, '--daemon']
+        if shared_dir:
+            argv += ['--define', 'lxc.mount.entry=%s %s none bind,create=dir 0 0' % (shared_dir, shared_dir[1:])]
+        argv += args.lxcargs
+        rc = VirtSubproc.execute_timeout(None, 310, sudoify(argv, 300))[0]
+        if rc != 0:
+            VirtSubproc.bomb('lxc-start failed with exit status %d' % rc)
+        capabilities.append('reboot')
+
+
+def start_lxc_copy():
+    if args.ephemeral:
+        argv = ['lxc-copy', '--name', args.template, '--newname', lxc_container_name, '--ephemeral']
+        if shared_dir:
+            argv += ['--mount', 'bind=%s:%s' % (shared_dir, shared_dir)]
+        rc = VirtSubproc.execute_timeout(None, 310, sudoify(argv, 300),
+                                         stdout=subprocess.DEVNULL)[0]
+        if rc != 0:
+            VirtSubproc.bomb('lxc-copy with exit status %i' % rc)
+    else:
+        argv = ['lxc-copy', '--name', args.template, '--newname', lxc_container_name]
+        rc = VirtSubproc.execute_timeout(None, 310, sudoify(argv, 300),
+                                         stdout=subprocess.DEVNULL)[0]
+        if rc != 0:
+            VirtSubproc.bomb('lxc-copy with exit status %i' % rc)
+        argv = ['lxc-start', '--name', lxc_container_name, '--daemon']
+        if shared_dir:
+            argv += ['--define', 'lxc.mount.entry=%s %s none bind,create=dir 0 0' % (shared_dir, shared_dir[1:])]
+        argv += args.lxcargs
+        rc = VirtSubproc.execute_timeout(None, 310, sudoify(argv, 300),
+                                         stdout=subprocess.DEVNULL)[0]
+        if rc != 0:
+            VirtSubproc.bomb('lxc-start failed with exit status %d' % rc)
+
+    # lxc-copy ephemeral containers support reboot too
+    capabilities.append('reboot')
+
+
+def hook_open():
+    global args, lxc_container_name, shared_dir
+
+    lxc_container_name = args.name or get_available_lxc_container_name()
+    adtlog.debug('using container name %s' % lxc_container_name)
+    if shared_dir is None:
+        # shared bind mount works poorly for unprivileged containers due to
+        # mapped UIDs
+        if args.sudo or os.geteuid() == 0:
+            shared_dir = tempfile.mkdtemp(prefix='autopkgtest-virt-lxc.shared.')
+    else:
+        # don't change the name between resets, to provide stable downtmp paths
+        os.makedirs(shared_dir)
+    if shared_dir:
+        os.chmod(shared_dir, 0o755)
+    if shutil.which('lxc-copy'):
+        start_lxc_copy()
+    else:
+        start_lxc1()
+    try:
+        adtlog.debug('waiting for lxc guest start')
+        wait_booted(lxc_container_name)
+        adtlog.debug('lxc guest started')
+        determine_normal_user(lxc_container_name)
+        # provide a minimal and clean environment in the container
+        # We also want to avoid exiting with 255 as that's auxverb's exit code
+        # if the auxverb itself failed; so we translate that to 253.
+        # Tests or builds sometimes leak background processes which might still
+        # be connected to lxc-attach's stdout/err; we need to kill these after the
+        # main program (build or test script) finishes, otherwise we get
+        # eternal hangs.
+        VirtSubproc.auxverb = [
+            'lxc-attach', '--name', lxc_container_name, '--',
+            'env', '-i', 'bash', '-c',
+            'set -a; '
+            '[ -r /etc/environment ] && . /etc/environment 2>/dev/null || true; '
+            '[ -r /etc/default/locale ] && . /etc/default/locale 2>/dev/null || true; '
+            '[ -r /etc/profile ] && . /etc/profile 2>/dev/null || true; '
+            'set +a;'
+            '"$@"; RC=$?; [ $RC != 255 ] || RC=253; '
+            'set -e;'
+            'myout=$(readlink /proc/$$/fd/1);'
+            'myerr=$(readlink /proc/$$/fd/2);'
+            'myout="${myout/[/\\\\[}"; myout="${myout/]/\\\\]}";'
+            'myerr="${myerr/[/\\\\[}"; myerr="${myerr/]/\\\\]}";'
+            'PS=$(ls -l /proc/[0-9]*/fd/* 2>/dev/null | sed -nr \'\#(\'"$myout"\'|\'"$myerr"\')# { s#^.*/proc/([0-9]+)/.*$#\\1#; p}\'|sort -u);'
+            'KILL="";'
+            'for pid in $PS; do'
+            '    [ $pid -ne $$ ] && [ $pid -ne $PPID ] || continue;'
+            '    KILL="$KILL $pid";'
+            'done;'
+            '[ -z "$KILL" ] || kill -9 $KILL >/dev/null 2>&1 || true;'
+            'exit $RC', '--'
+        ]
+        if args.sudo:
+            VirtSubproc.auxverb = ['sudo', '--preserve-env'] + VirtSubproc.auxverb
+    except:
+        # Clean up on failure
+        hook_cleanup()
+        raise
+
+
+def hook_downtmp(path):
+    global capabilities, shared_dir
+
+    if shared_dir:
+        d = os.path.join(shared_dir, 'downtmp')
+        # these permissions are ugly, but otherwise we can't clean up files
+        # written by the testbed when running as user
+        VirtSubproc.check_exec(['mkdir', '-m', '777', d], downp=True, timeout=30)
+        capabilities.append('downtmp-host=' + d)
+    else:
+        d = VirtSubproc.downtmp_mktemp(path)
+    return d
+
+
+def hook_revert():
+    hook_cleanup()
+    hook_open()
+
+
+def hook_wait_reboot():
+    adtlog.debug('hook_wait_reboot: waiting for container to shut down...')
+    VirtSubproc.execute_timeout(None, 65, sudoify(
+        ['lxc-wait', '-n', lxc_container_name, '-s', 'STOPPED', '-t', '60']))
+    adtlog.debug('hook_wait_reboot: container shut down, waiting for reboot')
+    wait_booted(lxc_container_name)
+
+
+def hook_cleanup():
+    global capabilities, shared_dir, lxc_container_name
+
+    VirtSubproc.downtmp_remove()
+    capabilities = [c for c in capabilities if not c.startswith('downtmp-host')]
+
+    if lxc_container_name:
+        VirtSubproc.check_exec(sudoify(['lxc-stop', '--quiet', '--kill', '--name', lxc_container_name], 600), timeout=610)
+        # ephemeral containers don't exist at this point any more, so make failure
+        # non-fatal
+        (s, o, e) = VirtSubproc.execute_timeout(
+            None, 310, sudoify(['lxc-destroy', '--quiet', '--name', lxc_container_name], 300),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if s != 0 and e and 'not defined' not in e:
+            sys.stderr.write(e)
+        lxc_container_name = None
+
+    if shared_dir:
+        shutil.rmtree(shared_dir, ignore_errors=True)
+
+
+def hook_capabilities():
+    return capabilities
+
+
+parse_args()
+VirtSubproc.main()

@@ -1,0 +1,17 @@
+#!/bin/sh
+# build ../testclick_*.click; this requires cmake and click
+set -eu
+SRCDIR=$(readlink -f $(dirname $0))
+
+WORK=$(mktemp -d)
+trap "rm -r $WORK" EXIT INT QUIT PIPE
+BUILD=$WORK/build
+INST=$WORK/inst
+mkdir $BUILD
+
+cd $BUILD
+cmake $SRCDIR
+make
+make install DESTDIR=$INST
+click build $INST
+cp *.click $SRCDIR/..

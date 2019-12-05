@@ -1,0 +1,352 @@
+#!/bin/sh
+
+# adb.ssh is part of autopkgtest
+# autopkgtest is a tool for testing Debian binary packages
+#
+# This script sets up an ssh connection to an adb host. If that adb host is an
+# Ubuntu Touch system, it also does some extra configuration like disabling the
+# screen timeout and allowing Autopilot to introspect running apps.
+#
+# Options:
+# -r/--reset  Do a factory reset of the device before running the test
+#             (Available on Ubuntu Phone only; disabled for now as it does not
+#             re-enable developer mode)
+# -b/--reboot Reboot the device before running the test
+# -s serial | --serial=serial
+#             Serial  ID  of  the device as returned by adb devices -l when
+#             several devices are connected to the same host.
+# -p PASSWORD | --password PASSWORD
+#             sudo password; if not given, tries "phablet" and "0000"; if
+#             neither works, tests cannot run as root
+# --keep-screen-active
+#             "powerd-cli display" is run during tests, and stopped at the end.
+#             With this option it will stay running, so that the display never
+#             turns off and locks after the test. Use with caution!
+#
+# autopkgtest is Copyright (C) 2006-2014 Canonical Ltd.
+#
+# Author: Jean-Baptiste Lallement <jean-baptiste.lallement@canonical.com>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+#
+# See the file CREDITS for a full list of credits information (often
+# installed as /usr/share/doc/autopkgtest/CREDITS).
+set -e
+
+SSH_USER=phablet
+SUDO_PASSWORD=
+CAPABILITIES='isolation-machine reboot'
+
+# allow using lp:phablet-tools from a checkout
+if [ -n "$PHABLET_TOOLS_PATH" ]; then
+    export PATH="$PHABLET_TOOLS_PATH:$PATH"
+fi
+
+# argument parsing
+ADBOPTS=""
+RESET=""
+REBOOT=""
+IDENTITY=
+KEEP_POWERD_CLI=
+
+open() {
+    # Setup a connection to an adb device
+    # - Configure ssh connection
+    # - optionally mount device RW
+    wait_booted
+
+    if [ -n "$REBOOT" ]; then
+        adb $ADBOPTS reboot
+        wait_booted
+    fi
+
+    # special setup on Ubuntu images
+    if [ -n "$(adb $ADBOPTS shell 'type unity8 2>/dev/null')" ]; then
+        if [ -n "$RESET" ]; then
+            revert
+        else
+            ubuntu_prepare_config
+            ubuntu_prepare_for_testing
+        fi
+        #CAPABILITIES="$CAPABILITIES revert"
+    fi
+
+
+    # Configure SSH
+    adb $ADBOPTS shell 'gdbus call -y -d com.canonical.PropertyService -o /com/canonical/PropertyService -m com.canonical.PropertyService.SetProperty ssh true >/dev/null'
+    for port in `seq 2222 2299`; do
+        adb $ADBOPTS forward tcp:$port tcp:22 && break
+    done
+
+    # Purge the device host key so that SSH doesn't print a scary warning about it
+    # (it changes every time the device is reflashed and this is expected)
+    ssh-keygen -f ~/.ssh/known_hosts -R [localhost]:$PORT 2>/dev/null || true
+
+    # Copy your ssh id down to the device so you never need a password.
+    IDENTITY=$HOME/.ssh/id_rsa
+    if [ ! -e $IDENTITY ]; then
+        IDENTITY=$HOME/.ssh/id_autopkgtest
+        if [ ! -e $IDENTITY ]; then
+            echo "No default ssh key, generating $IDENTITY" >&2
+            ssh-keygen -q -t ed25519 -f $IDENTITY -N ''
+        fi
+    fi
+    script=$(mktemp --tmpdir $(basename $0).XXXXXX)
+    adb $ADBOPTS push ${IDENTITY}.pub /home/$SSH_USER/.ssh/authorized_keys
+    cat>$script <<EOF
+# Set right permissions
+chown $SSH_USER:$SSH_USER -R /home/$SSH_USER/.ssh/
+chmod 700 /home/$SSH_USER/.ssh
+chmod 600 /home/$SSH_USER/.ssh/authorized_keys
+EOF
+
+    adb $ADBOPTS push $script /tmp
+    adb $ADBOPTS shell sh $script
+    adb $ADBOPTS shell rm $script
+    rm $script
+
+    # verify that we can connect through ssh
+    local ssh_cmd="ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i $IDENTITY -p $port -l $SSH_USER localhost"
+    for retry in `seq 10`; do
+        if $ssh_cmd true; then
+            can_ssh=1
+            break
+        fi
+        sleep 2
+    done
+    if [ -z "$can_ssh" ]; then
+        echo "ssh setup failed, cannot connect" >&2
+        exit 1
+    fi
+
+    # try to auto-detect sudo password from common ones used by CI
+    for p in phablet 0000; do
+        if $ssh_cmd "echo $p | sudo -p '' -S true" >/dev/null 2>&1; then
+            SUDO_PASSWORD="$p"
+            break
+        fi
+    done
+
+    # ensure that adb comes back after reboot
+    if [ -n "$SUDO_PASSWORD" ]; then
+        if ! $ssh_cmd "echo \"$SUDO_PASSWORD\" | sudo -p '' -S touch /userdata/.adb_onlock"; then
+            echo "WARNING: Could not create /userdata/.adb_onlock, reboot will not work properly" >&2
+        fi
+    fi
+
+    # print info for autopkgtest-virt-ssh
+    cat<<EOF
+login=$SSH_USER
+hostname=localhost
+port=$port
+capabilities=$CAPABILITIES
+identity=$IDENTITY
+extraopts=--no-reset --fwd-port=$port $KEEP_POWERD_CLI
+EOF
+    if [ -n "$SUDO_PASSWORD" ]; then
+        echo "password=$SUDO_PASSWORD"
+    fi
+}
+
+wait_booted() {
+    echo "Waiting for device ADB to appear..." >&2
+    if ! timeout 300 adb $ADBOPTS wait-for-device >/dev/null; then
+        echo "ERROR: Timed out waiting for adb device" >&2
+    fi
+}
+
+# configure Ubuntu device for testing
+ubuntu_prepare_config() {
+    if [ -z "$(adb $ADBOPTS shell 'type unity8 2>/dev/null')" ]; then
+        # not an Ubuntu phone
+        return
+    fi
+
+    if ! type phablet-config >/dev/null 2>&1; then
+        echo "ERROR: phablet-config not found! Install phablet-tools package or" >&2
+        echo "bzr branch lp:phablet-tools and run with PHABLET_TOOLS_PATH=<checkout dir>" >&2
+        exit 1
+    fi
+
+    echo "Configuring Ubuntu phone for testing..." >&2
+
+    # disable first-time wizards; these fail due to adb instability from time
+    # to time, so retry
+    for retry in `seq 5`; do
+        if phablet-config $ADBOPTS welcome-wizard --disable >/dev/null; then
+            break
+        else
+            echo "Failed to disable welcome wizard, retrying (attempt $retry)..." >&2
+            sleep 1
+        fi
+    done
+    # this needs accounts-daemon running
+    adb $ADBOPTS shell 'while ! pidof accounts-daemon >/dev/null; do sleep 1; done'
+    for retry in `seq 5`; do
+        if phablet-config $ADBOPTS edges-intro --disable >/dev/null; then
+            break
+        else
+            echo "Failed to disable edges intro, retrying (attempt $retry)..." >&2
+            sleep 1
+        fi
+    done
+
+    # kill an already running welcome wizard
+    adb $ADBOPTS shell 'kill `pidof system-settings-wizard` 2>/dev/null'
+}
+
+# test run time setup for Ubuntu device
+ubuntu_prepare_for_testing() {
+    if [ -z "$(adb $ADBOPTS shell 'type unity8 2>/dev/null')" ]; then
+        # not an Ubuntu phone
+        return
+    fi
+
+    echo "Preparing Ubuntu phone for running tests..." >&2
+
+    echo "Waiting for desktop to boot" >&2
+    local timeout=$(($(date +%s) + 300))
+    while [ "$(date +%s)" -le $timeout ]; do
+        out=$(adb $ADBOPTS shell 'gdbus call --timeout 5 --session --dest com.canonical.UnityGreeter --object-path / --method org.freedesktop.DBus.Properties.Get com.canonical.UnityGreeter IsActive 2>/dev/null')
+        if [ -n "$out" ]; then
+            timeout=0
+            break
+        fi
+        sleep 5
+    done
+    if [ "$timeout" -gt 0 ]; then
+        echo "ERROR: timed out waiting for Unity greeter" >&2
+        exit 1
+    fi
+
+    # disable screen dimming; ugly, but pretty much everything else hangs forever
+    adb $ADBOPTS shell "setsid powerd-cli display </dev/null >/dev/null 2>&1 & disown;
+                        while ! pidof powerd-cli >/dev/null; do sleep 0.1; done"
+
+    # unlock the greeter
+    adb $ADBOPTS shell "gdbus call --session --dest com.canonical.UnityGreeter --object-path / --method com.canonical.UnityGreeter.HideGreeter && echo Greeter unlocked" >/dev/null
+}
+
+revert() {
+    # revert is only offered on Ubuntu images
+    echo "Performing factory reset, this will take a minute..." >&2
+
+    # save current network connections
+    NETCONF=$(phablet-config $ADBOPTS network --read) || true:
+
+    # do factory reset
+    adb $ADBOPTS shell 'gdbus call --system -d com.canonical.SystemImage -o /Service -m com.canonical.SystemImage.FactoryReset'
+    wait_booted
+    adb $ADBOPTS shell 'while ! pidof NetworkManager >/dev/null; do sleep 1; done'
+
+    # restore network connections
+    if [ -n "$NETCONF" ]; then
+        phablet-config $ADBOPTS network --write "$NETCONF"
+    fi
+
+    ubuntu_prepare_config
+    ubuntu_prepare_for_testing
+}
+
+wait_reboot() {
+    if [ -z "$FWD_PORT" ]; then
+        echo "ERROR: Must pass --fwd-port" >&2
+        exit 1
+    fi
+    # wait until this fails because adbd shuts down
+    adb $ADBOPTS shell sleep 300 2>/dev/null || true
+    wait_booted
+    adb $ADBOPTS shell 'gdbus call -y -d com.canonical.PropertyService -o /com/canonical/PropertyService -m com.canonical.PropertyService.SetProperty ssh true >/dev/null'
+    adb $ADBOPTS forward tcp:$FWD_PORT tcp:22
+    ubuntu_prepare_for_testing
+}
+
+cleanup() {
+    [ -n "$KEEP_POWERD_CLI" ] || adb $ADBOPTS shell pkill powerd-cli
+}
+
+
+#
+# main
+#
+
+# argument parsing
+SHORTOPTS="l:,p:,s:,w,r,b"
+LONGOPTS="login:,password:,serial:,rw,apt-update,reset,reboot,no-reset,fwd-port:,keep-screen-active"
+
+TEMP=$(getopt -o $SHORTOPTS --long $LONGOPTS -- "$@")
+eval set -- "$TEMP"
+
+while true; do
+    case "$1" in
+        -l|--login)
+            SSH_USER=$2
+            shift 2;;
+        -p|--password)
+            SUDO_PASSWORD="$2"
+            shift 2;;
+        -s|--serial)
+            ADBOPTS="$ADBOPTS -s $2"
+            shift 2;;
+        -b|--reboot)
+            REBOOT="1"
+            shift;;
+        -r|--reset)
+            echo "--reset is currently broken as it does not restore PIN/developer mode. Use -b/--reboot instead." >&2
+            exit 1
+            RESET="1"
+            shift;;
+        # passed in "extraopts" so that --reset is only applied once, not
+        # in between tests that call "revert"
+        --no-reset)
+            RESET=""
+            shift;;
+        --fwd-port)
+            FWD_PORT="$2"
+            shift 2;;
+        --keep-screen-active)
+            KEEP_POWERD_CLI="$1"
+            shift;;
+        --)
+            shift;
+            break;;
+        *)
+            echo "E: $(basename $0): Unsupported option $1" >&2
+            exit 1;;
+    esac
+done
+
+if [ -z "$1" ]; then
+    echo "Needs to be called with command as first argument" >&2
+    exit 1
+fi
+
+cmd=$(echo "$1"|tr '[[:upper:]]' '[[:lower:]]')
+shift
+
+case $cmd in
+    open)
+        open;;
+    revert)
+        revert;;
+    wait-reboot)
+        wait_reboot;;
+    cleanup)
+        cleanup;;
+    *)
+        echo "invalid command $cmd" >&2
+        exit 1
+        ;;
+esac

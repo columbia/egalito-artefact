@@ -1,0 +1,19 @@
+--- afl-patched/afl-fuzz.c	2019-09-23 14:22:52.181801831 -0400
++++ afl-patched/afl-fuzz.c	2019-09-23 14:25:52.792978393 -0400
+@@ -7980,6 +7980,7 @@
+   else
+     use_argv = argv + optind;
+   
++#if 0
+   // replace target binary with drrun/drrun64
+   char **args;
+   int target_args_count = argc- optind;
+@@ -8003,6 +8004,9 @@
+   args[DRRUN_ARGS_COUNT + target_args_count] = NULL;
+ 
+   use_argv = args;
++#else
++  use_argv = argv + optind;
++#endif
+ 
+   perform_dry_run(use_argv);

@@ -1,0 +1,85 @@
+#!/bin/sh
+# Skeleton for an autopkgtest-virt-ssh setup script that configures a testbed.
+# See man autopkgtest-virt-ssh for details.
+
+set -e
+
+# add testbed capabilities here (possibly dynamically), see
+# doc/README.virtualisation-server.rst
+CAPABILITIES='isolation-machine'
+
+SUDO_PASSWORD=''
+
+# create a testbed (if necessary), configure ssh, copy ssh key into it,
+# configure sudo, etc.; print a list of "key=value" parameters to stdout on
+# success
+# required: login, hostname
+# optional: identity, password, port, options, capabilities, extraopts
+# see autopkgtest-virt-ssh(1) for details
+open() {
+    cat<<EOF
+login=<username>
+hostname=<host>
+capabilities=$CAPABILITIES
+identity=$HOME/.ssh/id_rsa
+extraopts="<additional args to pass to the script with other commands>"
+EOF
+    if [ -n "$SUDO_PASSWORD" ]; then
+        echo "password=$SUDO_PASSWORD"
+    fi
+}
+
+# called when closing the testbed; should revert/remove things installed in
+# open() if the testbed is not ephemeral
+cleanup() {
+    exit 0
+}
+
+# Called for reverting the testbed. This can optionally output some or all of
+# the ssh config keys from open() to update the configuration.
+# This only needs to be implemented if CAPABILITIES offers "revert".
+revert() {
+    echo "revert not implemented" >&2
+    exit 1
+
+    # calling these two is a common method, but there might be a more efficient
+    # way like snapshots
+    # cleanup
+    # open
+}
+
+# Called after "reboot". You only need to implement this if CAPABILITIES offers
+# "reboot" and you need to do something more elaborate than just waiting for
+# ssh to go down and come back.
+wait_reboot() {
+    # wait for testbed to shut down, come back up, and re-prepare for ssh login
+    exit 1  # not implemented
+}
+
+# Called when the setup script fails with nonzero or on timeouts waiting for
+# ssh or reboot. If available, this should output some debugging information,
+# such as the boot log from the serial console. Implementing this is optional.
+debug_failure() {
+    exit 1  # not implemented
+}
+
+case "$1" in
+    open)
+        open $@;;
+    cleanup)
+        cleanup $@;;
+    revert)
+        revert $@;;
+    wait-reboot)
+        wait_reboot $@;;
+    debug-failure)
+        debug_failure $@;;
+    '')
+        echo "Needs to be called with command as first argument" >&2
+        exit 1
+        ;;
+    *)
+        echo "invalid command $1" >&2
+        exit 1
+        ;;
+esac

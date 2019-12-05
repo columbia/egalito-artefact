@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+testdir="$(dirname $(readlink -f $0))"
+rootdir="$(dirname $testdir)"
+check=$(which pycodestyle || which pep8)
+
+$check --ignore E402,E501 $rootdir/lib/*.py $rootdir/tools/autopkgtest-buildvm-ubuntu-cloud
+
+for v in chroot null schroot lxc lxd qemu ssh; do
+    $check --ignore E501,E402 $rootdir/virt/autopkgtest-virt-$v
+done
+
+$check --ignore E501,E402 $rootdir/runner/autopkgtest $testdir/autopkgtest $testdir/adt-run $testdir/testdesc $testdir/run_args $testdir/*.py

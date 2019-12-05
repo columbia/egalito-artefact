@@ -1,0 +1,25 @@
+{
+    "name": "testclick",
+    "title": "autopkgtest test click app",
+    "framework": "ubuntu-sdk-14.04-qml",
+    "maintainer": "Autopkgtest team <autopkgtest-devel@lists.alioth.debian.org>",
+    "version": "0.1",
+    "x-test": {
+        "simple": "tests/simple",
+        "inst": {
+            "path": "tests/inst",
+            "depends": ["python3-evdev"]
+        },
+        "serr": {
+            "path": "tests/printerr",
+            "restrictions": ["allow-stderr"]
+        },
+        "shell": {
+            "command": "grep ^root /etc/passwd",
+            "features": ["bites-back"]
+        },
+        "broken": {
+            "path": "tests/printerr"
+        }
+    }
+}

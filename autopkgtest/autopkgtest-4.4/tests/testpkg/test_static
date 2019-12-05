@@ -1,0 +1,2 @@
+#!/bin/sh
+echo "static script OK"

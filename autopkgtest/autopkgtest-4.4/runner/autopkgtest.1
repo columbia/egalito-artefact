@@ -1,0 +1,508 @@
+.TH autopkgtest 1 2014 autopkgtest
+.SH NAME
+autopkgtest \- test an installed binary package using the source package's tests
+.SH SYNOPSIS
+.B autopkgtest
+.IR [ options ...]
+.IR "testsrc " [ testbinary "...]"
+.B \-\-
+.I virt\-server
+.RI [ virt\-server\-arg ...]
+.br
+.SH DESCRIPTION
+autopkgtest runs tests on binary Debian or Click packages, as installed on a
+system (called "testbed").  The tests are supplied in the source package.
+
+autopkgtest runs each test supplied by a particular package and reports
+the results.  It drives the specified virtualisation regime as
+appropriate, parses the test description metadata, and arranges
+for data to be copied to and from the testbed as required.
+
+See /usr/share/doc/autopkgtest/README.running\-tests.rst.gz for an
+introduction about how to use autopkgtest.
+
+.SH TESTING A DEBIAN PACKAGE
+
+Positional (non-option) arguments specify exactly one source package
+(containing the test code) and optionally some binary packages to test.
+
+testsrc can be one of:
+
+.TP
+.B .dsc file
+Run tests from Debian \fI.dsc\fR source package. By default the package will
+also be built and the resulting binaries will be used to satisfy test
+dependencies; to disable that, specify the
+.BR -B / --no-built-binaries
+option.
+
+.TP
+.B source package directory
+Run tests from a Debian source tree directory. If that is an unbuilt tree,
+this is very similar to specifying a \fB.dsc\fR. If that is a built tree, all
+test dependencies get satisfied by archive packages, unless you explicitly
+specify locally built .debs as well.
+
+.B Attention:
+If you just specify a bare directory name which is a legal Debian source
+package name, it will be interpreted as the latter (see below). In this case,
+prefix the directory name with
+.BR ./ .
+
+.TP
+.B current directory
+If no source package is specified on the command line and the current directory
+is a Debian source package, this will be tested.
+
+.TP
+.B source package name
+Downloads the given source package name with \fBapt\-get source\fR in the
+testbed and run its tests. This is similar to specifying a .dsc
+but avoids copying the source from the host to the testbed. Possibly built
+binaries (if the test specifies
+.B needs-build\fR) will
+.B not
+be used to satisfy dependencies, as usually in this mode you want to test
+binaries from a real archive.
+
+.TP
+.B git URL or URL#branch
+Git-clones the given URL (which must contain an unbuilt Debian source tree) and
+runs the tests from that.
+If
+.I branch
+is given, this branch will be checked out instead of the default (usually
+"master"). This can also be a more general refspec such as #refs/pull/123/head"
+for a GitHub pull request.
+
+This is very similar to cloning manually and specifying the checkout directory
+as test; i. e.  this is commonly used with
+.BR \-\-no\-built\-binaries .
+The
+.B git
+package will be installed if necessary.
+
+.TP
+.B .changes file
+Run tests from the .dsc source package in the given .changes file. If
+the .changes contains .deb packages, they will be used for the test.
+Acts as if you had specified the .debs and .dsc from the .changes file as
+explicit arguments. Note that if the .changes contains
+.I only
+debs, the corresponding .dsc still needs to be specified alongside, or the
+current directory must be the source package.
+
+.PP
+All other positional arguments must be .deb binary packages. They will be used
+for both build and test dependencies of the source package. If any binary
+package is given, then
+.B \-\-no\-built\-binaries
+is implied.
+
+.SH TESTING A CLICK PACKAGE
+
+This needs exactly one .click package. If its manifest specifies an
+.B x-source
+URL, the corresponding source package will be downloaded and tests run from
+there; then a source directory does not need to be given. Otherwise specifying
+a source directory as positional argument is mandatory.
+
+For testing a local .click package, give its path to
+.BR autopkgtest.
+For testing a preinstalled click, use
+.BR "\-\-installed\-click " com.example.myclick
+(this cannot be given as positional argument as this cannot be disambiguated
+from Debian source package names).
+
+Examples with explicit click source directory:
+
+.RS
+autopkgtest src/myclick_0.1_all.click com.example.myclick src/myclick/ -- [...]
+.PP
+autopkgtest --installed-click com.example.myclick src/myclick/ -- [...]
+.RE
+
+Examples without click source directory; click package needs to have
+.B x-source
+manifest entry:
+
+.RS
+autopkgtest src/myclick_0.1_all.click -- [...]
+.PP
+autopkgtest --installed-click com.example.myclick -- [...]
+.RE
+
+.SH TEST OPTIONS
+
+.TP
+.BR -B " | " --no-built-binaries
+Binaries from unbuilt source packages (see above)
+will not be built or ignored, and dependencies are satisfied with packages from
+the archive. Note that the source package still gets built if a test requires
+\fBbuild-needed\fR.
+
+.TP
+.BI --override-control= PATH
+Read the test metadata from
+.I PATH
+instead of
+.B debian/tests/control
+(for Debian sources)
+or the Click manifest.
+
+.TP
+.BI --test-name= TEST
+Run only the given test name (from test control file).  This replaces
+--testname which is deprecated.
+
+.SH LOGGING OPTIONS
+If you don't specify any option,
+.B autopkgtest
+only writes its output/results to stderr.
+
+.TP
+.BI -o " dir" " | --output-dir=" dir
+Specifies that test artifacts (stderr and stdout from the tests, the log file,
+built binary packages etc.) should be placed in the given directory.
+\fIdir\fR must not exist yet or be empty, otherwise
+.B autopkgtest
+will refuse to use it.
+
+.TP
+.BI -l " logfile" " | --log-file=" logfile
+Specifies that the trace log should be written to \fIlogfile\fR
+instead of to \fIoutput-dir\fR.
+
+.TP
+.BI --summary= summary
+Specifies that a summary of the outcome should be written to
+\fIsummary\fR.  The events in the summary are written to the log
+in any case.
+
+.TP
+.BR -q " | " --quiet
+Do not send a copy of \fBautopkgtest\fR's trace logstream to stderr.  This
+option does not affect the copy sent to \fIlogfile\fR or
+\fIoutput-dir\fR.  Note that without the trace
+logstream it can be very hard to diagnose problems.
+
+.SH TEST BED SETUP OPTIONS
+
+.TP
+.BI \-\-setup\-commands= commands
+Run
+.I commands
+after opening the testbed. This can be used e. g. to enable additional apt
+sources, run
+.B apt-get update
+or similar.
+If
+.I commands
+is an existing file name, the commands are read from that; otherwise it
+is a string with the actual commands that gets run as-is. File names
+without directory will be searched in both the current directory and in
+.B /usr/share/autopkgtest/setup-commands/
+so you do not need to give the full path for setup scripts shipped with
+autopkgtest.
+
+Normally, if the setup commands fail, autopkgtest will consider this a
+transient testbed error (exit code 16). However, if the setup commands exit
+with code 100, autopkgtest will consider this an "erroneous package" (exit code
+12) instead, so this can be used to e. g. detect upgrade errors to a new
+version. Note that apt exits with exit code 100 in these cases.
+
+This option can be specified multiple times.
+
+If
+.B \-\-user
+is given or the test bed provides a
+.B suggested-normal-user
+capability, the
+.B $AUTOPKGTEST_NORMAL_USER
+environment variable will be set to that user.
+
+If the setup commands affect anything in boot directories (like /boot or
+/lib/systemd/system) and the testbed supports rebooting, the testbed will be
+rebooted after the setup commands. This can be suppressed by creating a file
+.BR /run/autopkgtest_no_reboot.stamp .
+
+.TP
+.BI \-\-setup\-commands\-boot= commands
+Run
+.I commands
+after the
+.BR \-\-setup\-commands ,
+and after every reboot. For example, these commands could be used to
+add files in a tmpfs.
+
+These commands never cause the testbed to be rebooted (because that could
+lead to an infinite loop). Otherwise, they are just like the
+.BR \-\-setup\-commands .
+
+This option can be specified multiple times.
+
+.TP
+.BR --apt-upgrade " | " -U
+Run
+.B apt\-get update
+and
+.B apt\-get dist-upgrade -y
+in the testbed before running the tests.
+
+.TP
+.BI \-\-apt\-pocket= pocket[=pkgname,src:srcname,...]
+Add apt sources for \fIrelease\fR-\fIpocket\fR. This finds the first
+.B deb
+line in
+.B /etc/apt/sources.list
+which does not already specify a pocket and adds a deb and deb-src line with
+that pocket to
+.B /etc/apt/sources.list.d/\fIpocket\fB.list\fR.
+This also calls
+.B apt-get update
+for the new pocket (but not for anything else).
+
+If a package list is given after =, set up apt pinning to use only those
+packages from
+.I pocket\fR.
+An entry "src:srcname" expands to all binary packages built by that source.
+This can be used for minimizing dependencies taken from
+.I pocket
+so that package updates in that pocket can be tested independently from each
+other for better isolation.
+.B Attention:
+This does not currently resolve some situations where dependencies of
+the given packages can only be resolved in the given pocket. In that case the
+apt pinning will be removed and package installation will be retried with the
+entirety of
+.I pocket\fR.
+
+.TP
+.BI \-\-copy= HOSTPATH:TESTBEDPATH
+Copy file or directory from host into testbed after opening. This happens
+before
+.B \-\-setup-commands
+thus you can use these files in the setup commands.
+
+.TP
+.BI \-\-env= VAR=value
+Set arbitrary environment variable in the build and test. Can be specified
+multiple times.
+
+.SH USER/PRIVILEGE HANDLING OPTIONS
+
+.TP
+.BI -u " user" " | --user=" user
+Run builds and tests as \fIuser\fR on the testbed.  This needs root on
+the testbed; if root on the testbed is not available then builds and
+tests run as whatever user is provided.
+
+.TP
+.BI --gain-root= gain-root
+Prefixes
+.B debian/rules binary
+with
+.RB gain-root .
+The default is not to use anything, except that if
+\fB--user\fR is supplied or root on the testbed is not available the
+default is \fBfakeroot\fR.
+
+.SH DEBUGGING OPTIONS
+
+.TP
+.BR --debug | -d
+Include additional debugging information in the trace log.  Each
+additional \fB-d\fR increases the debugging level; the current maximum
+is \fB-ddd\fR.  If you like to see what's going on, \fR-d\fB or
+\fR-dd\fB is recommended.
+
+.TP
+.BR --shell-fail | -s
+Run an interactive shell in the testbed after a failed build, test, or
+dependency installation.
+
+.TP
+.BR --shell
+Run an interactive shell in the testbed after every test.
+
+.SH TIMEOUT OPTIONS
+
+.TP
+.BR --timeout- \fIwhich\fR = \fIseconds\fR
+Use a different timeout for operations on or with the testbed.  There
+are five timeouts affected by five values of \fIwhich\fR:
+.BR short :
+supposedly
+short operations like setting up the testbed's apt and checking the
+state (default: 100s);
+.BR install :
+installation of packages including dependencies
+(default: 3,000s);
+.BR test :
+test runs (default: 10,000s);
+.BR copy :
+copy files/directories between host and testbed
+(default: 300s); and
+.BR build :
+builds (default:
+100,000s).  The value must be specified as an integer number of seconds.
+
+.TP
+.BR --timeout-factor =\fIdouble\fR
+Multiply all of the default timeouts by the specified factor (see
+\fB--timeout-\fR\fIwhich\fR above).  Only the defaults are affected;
+explicit timeout settings are used exactly as specified.
+
+.SH LOCALE OPTIONS
+
+.TP
+.BI --set-lang= langval
+When running commands on the testbed, sets the \fBLANG\fR environment
+variable to \fIlangval\fR.  The default in \fBautopkgtest\fR is to set it
+to \fBC.UTF-8\fR.
+
+.SH OTHER OPTIONS
+
+.TP
+.BI --no-auto-control
+Disable automatic test generation with autodep8, even if it is installed. In
+that case, packages without tests will exit with code 8 ("No tests in this
+package") just like without autodep8.
+
+
+.TP
+.BI "--build-parallel=" N
+Set
+.I parallel=N
+DEB_BUILD_OPTION for building packages. By default this is the number of
+available processors. This is mostly useful in containers where you can
+restrict the available RAM, but not restrict the number of CPUs.
+
+.TP
+.BR \-h | \-\-help
+Show command line help and exit.
+
+
+.SH VIRTUALIZATION SERVER
+
+.TP
+\fB--\fR \fIvirt-server virt-server-arg\fR...
+Specifies the virtualisation regime server, as a command and arguments
+to invoke.
+.I virt-server
+must be an existing autopkgtest virtualization server such as
+.B schroot
+or
+.BR qemu .
+
+All the remaining arguments and options after
+.B --
+are passed to the virtualisation server program. See the manpages of the
+individual servers for how to use them.
+
+.SH OUTPUT FORMAT
+During a normal test run, one line is printed for each test.  This
+consists of a short string identifying the test, some horizontal
+whitespace, and either
+.B PASS
+or
+.BR FAIL " reason"
+or
+.BR SKIP " reason"
+where the pass/fail indication is separated by any reason by some
+horizontal whitespace.
+
+The string to identify the test consists of a short alphanumeric
+string invented by \fBautopkgtest\fR to distinguish different command-line
+arguments, the \fIargid\fR, followed by a hyphen and the test name.
+
+Sometimes a
+.B SKIP
+will be reported when the name of the test is not known or not
+applicable: for example, when there are no tests in the package, or a
+there is a test stanza which contains features not understood by this
+version of
+.BR autopkgtest .
+In this case
+.B *
+will appear where the name of the test should be.
+
+If \fBautopkgtest\fR detects that erroneous package(s) are involved, it
+will print the two lines
+.BR "blame: " \fIblamed-thing\fR ...
+and
+.BR "badpkg: " \fImessage\fR.
+Here each whitespace-separated \fIblamed-thing\fR is one of
+.BI arg: argument
+(representing a pathname found in a command line argument),
+.BI dsc: package
+(a source package name),
+.BI deb: package
+(a binary package name)
+or possibly other strings to be determined.  This indicates which
+arguments and/or packages might have contributed to the problem; the
+ones which were processed most recently and which are therefore most
+likely to be the cause of a problem are listed last.
+
+.SH CONFIGURATION FILES
+
+If you use lots of options or nontrivial virt server arguments, you can put any
+part of the command line into a text file, with one line per option. E. g. you
+can create a file
+.I sid.cfg
+with contents like
+
+.RS
+.EX
+-s
+--output-dir=/tmp/testout
+--apt-upgrade
+--
+schroot
+sid
+.EE
+.RE
+
+and then run
+
+.RS
+.EX
+autopkgtest foo_1_amd64.changes @sid.cfg
+.EE
+.RE
+
+The contents of the configuration file will be expanded in-place as if you
+would have given its contents on the command line. Please ensure that you
+.B don't place spaces
+between short options and their values, they would become a part of the
+argument value.
+
+
+.SH EXIT STATUS
+0	all tests passed
+.br
+2	at least one test skipped
+.br
+4	at least one test failed
+.br
+6	at least one test failed and at least one test skipped
+.br
+8	no tests in this package
+.br
+12	erroneous package
+.br
+16	testbed failure
+.br
+20	other unexpected failures including bad usage
+
+.SH SEE ALSO
+\fB/usr/share/doc/autopkgtest/README.running-tests.rst.gz\fR
+.br
+\fB/usr/share/doc/autopkgtest/README.package-tests.rst.gz\fR
+
+.SH AUTHORS AND COPYRIGHT
+This manpage is part of autopkgtest, a tool for testing Debian binary
+packages.  autopkgtest is Copyright (C) 2006-2014 Canonical Ltd.
+
+See \fB/usr/share/doc/autopkgtest/CREDITS\fR for the list of
+contributors and full copying conditions.

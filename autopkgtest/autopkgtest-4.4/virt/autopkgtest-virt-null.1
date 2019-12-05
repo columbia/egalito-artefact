@@ -1,0 +1,42 @@
+.TH autopkgtest-virt-null 1 2007 autopkgtest "Linux Programmer's Manual"
+.SH NAME
+autopkgtest-virt-null \- autopkgtest null virtualisation server
+.SH SYNOPSIS
+.BI "autopkgtest " "[...] " "-- null"
+.RI [ options ]
+.br
+.SH DESCRIPTION
+.B autopkgtest-virt-null
+provides a dummy autopkgtest virtualisation server which does not
+actually offer any kind of separation between host and testbed.
+
+Normally
+.B autopkgtest-virt-null
+will be invoked by
+.BR autopkgtest .
+
+There is of course no locking; nothing prevents multiple simultaneous
+programs from invoking
+.B autopkgtest-virt-null
+so as to reuse the same system as a testbed.
+.SH OPTIONS
+.TP
+.BR \-d " | " \-\-debug
+Enables debugging output.  Probably not hugely interesting.
+
+.SH INPUT, OUTPUT AND EXIT STATUS
+The behaviour of
+.B autopkgtest-virt-null
+is as described by the AutomatedTesting virtualisation regime
+specification.
+
+.SH SEE ALSO
+\fBautopkgtest\fR(1),
+\fB/usr/share/doc/autopkgtest/\fR.
+
+.SH AUTHORS AND COPYRIGHT
+This manpage is part of autopkgtest, a tool for testing Debian binary
+packages.  autopkgtest is Copyright (C) 2006-2007 Canonical Ltd and others.
+
+See \fB/usr/share/doc/autopkgtest/CREDITS\fR for the list of
+contributors and full copying conditions.

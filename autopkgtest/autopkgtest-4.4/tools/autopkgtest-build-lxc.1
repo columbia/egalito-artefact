@@ -1,0 +1,79 @@
+.TH autopkgtest-build-lxc 1 2014 "Linux Programmer's Manual"
+.SH NAME
+autopkgtest-build-lxc \- Create or update autopkgtest container for autopkgtest-virt-lxc
+
+.SH SYNOPSIS
+.B autopkgtest-build-lxc
+.I distribution release
+.RI [ architecture ]
+.RI [ script ]
+
+.SH DESCRIPTION
+.B autopkgtest-build-lxc
+creates or updates an LXC container \fBautopkgtest-\fIrelease\fR which is suitable for
+autopkgtest's LXC runner \fBautopkgtest-virt-lxc\fR(1).
+
+It calls
+.B lxc-create
+with the
+.I distribution
+template (which can currently be
+.B debian
+or
+.B ubuntu) and
+.BI -r release
+to build a debootstrap-like container, then enables
+.B deb-src
+apt sources, and runs
+.B apt-get update\fR.
+
+It defaults to the native architecture, but you can specify a different one as
+third parameter.
+
+The path to a script to be executed inside the container to customize the
+container can be passed as the fourth parameter. The script must be a POSIX
+shell script, and should not depend on bash-specific features.
+
+If the container already exists, it updates it as unintrusively as possible by
+first creating a new temporary container \fBautopkgtest-\fIrelease\fB.new\fR, and then
+rsyncing its root file system back to the existing \fBautopkgtest-\fIrelease\fR. Note
+that this could cause some side-effects and breakage if you have running
+containers with ephemeral overlays (i. e. using the
+.B --ephemeral
+option), but it does work in general. This update process does not interfere at
+all if you use
+.B autopkgtest-virt-lxc
+with cloning.
+
+Note that you need to call this as root, unless you set up LXC to allow
+per-user containers. But user containers will not work with many or even most
+autopkgtests.
+
+You can specify an apt proxy to use in the container in the
+.B $AUTOPKGTEST_APT_PROXY
+environment variable. If you have an apt proxy configured on the host,
+the container will automatically use this, otherwise there is no default.
+
+
+.SH EXAMPLES
+
+# autopkgtest-build-lxc debian sid
+
+.PP
+$ sudo autopkgtest-build-lxc ubuntu trusty i386
+
+.SH SEE ALSO
+\fBautopkgtest-virt-lxc\fR(1),
+\fBautopkgtest\fR(1),
+\fBlxc-create\fR(1),
+\fB/usr/share/doc/autopkgtest/\fR.
+
+.SH AUTHORS AND COPYRIGHT
+.B autopkgtest-build-lxc
+was written by Martin Pitt <martin.pitt@ubuntu.com>
+
+This manpage is part of autopkgtest, a tool for testing Debian binary
+packages.  autopkgtest is Copyright (C) 2006-2014 Canonical Ltd and others.
+
+See \fB/usr/share/doc/autopkgtest/CREDITS\fR for the list of
+contributors and full copying conditions.

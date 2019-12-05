@@ -1,0 +1,134 @@
+.TH autopkgtest-virt-lxd 1 2013 "Linux Programmer's Manual"
+.SH NAME
+autopkgtest-virt-lxd \- autopkgtest virtualisation server using LXD
+
+.SH SYNOPSIS
+.BI "autopkgtest " "[...] " "-- lxd"
+.RI [ options ]
+.I image
+.RI [ "-- extra lxc launch args..." ]
+
+.SH DESCRIPTION
+.B autopkgtest-virt-lxd
+provides an autopkgtest virtualisation server using LXD. It creates temporary
+containers from the given LXD image name.
+
+Normally
+.B autopkgtest-virt-lxd
+will be invoked by
+.BR autopkgtest .
+
+.SH REQUIREMENTS
+.B autopkgtest-virt-lxd
+makes no strict assumptions about the image. However, it is highly
+recommended that the image has eatmydata installed, or at least that gets
+installed via setup commands.
+
+For production use, it is recommended to use
+.BR autopkgtest-build-lxd (1)
+to generate an optimized image with autopkgtest's standard setup commands
+applied. Then these setup commands don't need to be applied for every test.
+This is particularly necessary if you want to use
+.B --apt-source
+tests, i. e. use
+.B apt-get source
+in the test bed to download the package to test. Standard images from
+.B linuxcontainers.org
+do not have "deb-src" apt sources by default.
+
+.SH OPTIONS
+
+.TP
+.BI -r " remote" " | --remote=" remote
+Run container on given remote host instead of locally. See
+.B lxc remote list
+for available remotes.
+
+.TP
+.BR \-d " | " \-\-debug
+Enables debugging output.
+
+.PP
+You can pass additional options to
+.B lxd launch\fR:
+Anything after a
+.B --
+gets appended verbatim to
+.BI "lxc launch " image\fR.
+
+.SH INPUT, OUTPUT AND EXIT STATUS
+The behaviour of
+.B autopkgtest-virt-lxd
+is as described by the AutomatedTesting virtualisation regime
+specification.
+
+.SH EXAMPLE
+
+Show available images on the standard
+.B linuxcontainers.org
+remote image server:
+
+.RS
+.EX
+lxc image list images:
+.EE
+.RE
+
+Run the tests of a local built directory tree on the current Debian sid
+image from the above
+.B images:
+remote:
+
+.RS
+.EX
+autopkgtest my-package/ -- lxd images:debian/sid/amd64
+.EE
+.RE
+
+Run the tests in a local built directory tree from a local LXD image
+.B desktop/i386\fR,
+ensuring that eatmydata is installed:
+
+.RS
+.EX
+autopkgtest --setup-commands 'apt-get install -y eatmydata' dir/to/test/ \\
+  -- lxd desktop/i386
+.EE
+.RE
+
+Run the tests of the
+.B gdk-pixbuf
+package on the current Debian sid image from the
+.B images:
+remote on a remote armhf host:
+
+.RS
+.EX
+lxc remote add armhf-test http://armhf.testlab.example.com:8443
+autopkgtest --setup-commands=setup-testbed gdk-pixbuf -- \\
+   lxd --remote armhf-test images:debian/sid/armhf
+.EE
+.RE
+
+Build a local image with standard setup commands pre-applied from a remote
+standard image, and run gdk-pixbuf test in it:
+
+.RS
+.EX
+autopkgtest-build-lxd images:ubuntu/xenial/amd64
+autopkgtest gdk-pixbuf -- lxd autopkgtest/ubuntu/xenial/amd64
+
+.SH SEE ALSO
+\fBautopkgtest\fR(1),
+\fBautopkgtest\-build-lxd\fR(1),
+\fB/usr/share/doc/autopkgtest/\fR.
+
+.SH AUTHORS AND COPYRIGHT
+.B autopkgtest-virt-lxd
+was written by Martin Pitt <martin.pitt@ubuntu.com>.
+
+This manpage is part of autopkgtest, a tool for testing Debian binary
+packages.  autopkgtest is Copyright (C) 2006-2015 Canonical Ltd and others.
+
+See \fB/usr/share/doc/autopkgtest/CREDITS\fR for the list of
+contributors and full copying conditions.

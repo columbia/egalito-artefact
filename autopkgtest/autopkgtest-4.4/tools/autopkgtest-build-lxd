@@ -1,0 +1,140 @@
+#!/bin/sh
+# autopkgtest-build-lxd is part of autopkgtest
+# autopkgtest is a tool for testing Debian binary packages
+#
+# autopkgtest is Copyright (C) 2006-2015 Canonical Ltd.
+#
+# Build or update an LXD image autopkgtest/<distro>/<release>/<arch> with
+# autopkgtest customizations from an arbitrary existing image.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+#
+# See the file CREDITS for a full list of credits information (often
+# installed as /usr/share/doc/autopkgtest/CREDITS).
+set -eu
+
+# generate temporary container name
+generate_container_name() {
+    while true; do
+        CONTAINER=$(mktemp autopkgtest-prepare-XXX -u)
+        lxc info "$CONTAINER" >/dev/null 2>&1 || break
+    done
+}
+
+# detect apt proxy
+proxy_detect() {
+    # support backwards compatible env var too
+    AUTOPKGTEST_APT_PROXY=${AUTOPKGTEST_APT_PROXY:-${ADT_APT_PROXY:-}}
+    if [ -z "$AUTOPKGTEST_APT_PROXY" ]; then
+        RES=`apt-config shell proxy Acquire::http::Proxy`
+        eval $RES
+        if echo "${proxy:-}" | egrep -q '(localhost|127\.0\.0\.[0-9]*)'; then
+            # translate proxy address to one that can be accessed from the
+            # running container
+            local bridge_interface=$(lxc profile show default | sed -n '/parent:/ { s/^.*: *//; p; q }') || true
+            if [ -n "$bridge_interface" ]; then
+                local bridge_ip=$(ip -4 a show dev "$bridge_interface" | awk '/ inet / {sub(/\/.*$/, "", $2); print $2}') || true
+                if [ -n "$bridge_ip" ]; then
+                    AUTOPKGTEST_APT_PROXY=$(echo "$proxy" | sed -r "s#localhost|127\.0\.0\.[0-9]*#$bridge_ip#")
+                fi
+            fi
+            if [ -n "$AUTOPKGTEST_APT_PROXY" ]; then
+                echo "Detected local apt proxy, using $AUTOPKGTEST_APT_PROXY as container proxy"
+            fi
+        elif [ -n "${proxy:-}" ]; then
+            AUTOPKGTEST_APT_PROXY="$proxy"
+            echo "Using $AUTOPKGTEST_APT_PROXY as container proxy"
+        fi
+    fi
+}
+
+setup() {
+    # set up apt proxy for the container
+    if [ -n "$AUTOPKGTEST_APT_PROXY" ] && [ "$AUTOPKGTEST_APT_PROXY" != "none" ]; then
+        echo "Acquire::http::Proxy \"$AUTOPKGTEST_APT_PROXY\";" | lxc file push - "$CONTAINER/etc/apt/apt.conf.d/01proxy"
+        # work around LP#1548878
+        lxc exec "$CONTAINER" -- chmod 644 /etc/apt/apt.conf.d/01proxy
+    fi
+
+    # wait until it is booted: lxc exec works and we get a numeric runlevel
+    timeout=60
+    while [ $timeout -ge 0 ]; do
+        timeout=$((timeout - 1))
+        sleep 1
+        O=`lxc exec "$CONTAINER" runlevel 2>/dev/null </dev/null` || continue
+        [ "$O" = "${O%[0-9]}" ] || break
+    done
+    [ $timeout -ge 0 ] || {
+        echo "Timed out waiting for container to boot" >&2
+        exit 1
+    }
+
+    ARCH=$(lxc exec "$CONTAINER" -- dpkg --print-architecture </dev/null)
+    DISTRO=$(lxc exec "$CONTAINER" -- sh -ec 'lsb_release -si 2>/dev/null || . /etc/os-release; echo "${NAME% *}"' </dev/null)
+    CRELEASE=$(lxc exec "$CONTAINER" -- sh -ec 'lsb_release -sc 2>/dev/null || awk "/^deb/ {sub(/\\[.*\\]/, \"\", \$0); print \$3; quit}" /etc/apt/sources.list' </dev/null)
+    echo "Container finished booting. Distribution $DISTRO, release $CRELEASE, architecture $ARCH"
+    RELEASE=${RELEASE:-${CRELEASE}}
+
+    # find setup-testbed script
+    for script in $(dirname $(dirname "$0"))/setup-commands/setup-testbed \
+                  /usr/share/autopkgtest/setup-commands/setup-testbed; do
+        if [ -r "$script" ]; then
+            echo "Running setup script $script..."
+            lxc exec "$CONTAINER" -- env MIRROR=${MIRROR:-} RELEASE=${RELEASE} sh < "$script"
+            break
+        fi
+    done
+    lxc stop "$CONTAINER"
+}
+
+#
+# main
+#
+
+if [ "${0%adt-build-lxd}" != "$0" ]; then
+    echo "WARNING: Deprecated command, please call this as autopkgtest-build-lxd" >&2
+fi
+
+if [ -z "${1:-}" ]; then
+    echo "Usage: $0 <image>" >&2
+    exit 1
+fi
+IMAGE="$1"
+CONTAINER=''
+trap '[ -z "$CONTAINER" ] || lxc delete -f "$CONTAINER"' EXIT INT QUIT PIPE
+
+proxy_detect
+generate_container_name
+lxc launch "$IMAGE" "$CONTAINER"
+setup
+
+# if there already is a published image, get its fingerprint to clean it up
+# afterwards
+DISTROLC=$(echo "$DISTRO" | tr '[:upper:]' '[:lower:]')
+ALIAS="autopkgtest/$DISTROLC/$RELEASE/$ARCH"
+if [ "${0%adt-build-lxd}" != "$0" ]; then
+    OLDALIAS="adt/$DISTROLC/$RELEASE/$ARCH"
+else
+    OLDALIAS=""
+fi
+DESCRIPTION="autopkgtest $DISTRO $RELEASE $ARCH"
+
+lxc publish "$CONTAINER" ${OLDALIAS:+--alias $OLDALIAS} --alias "$ALIAS" --public description="$DESCRIPTION" distribution="$DISTROLC" release="$RELEASE" architecture="$ARCH"
+
+# clean up old images
+for i in $(lxc image list | grep "$DESCRIPTION" | grep -v "$ALIAS${OLDALIAS:+\\|$OLDALIAS}" | cut -d'|' -f3); do
+    echo "Removing previous image $i"
+    lxc image delete "$i"
+done

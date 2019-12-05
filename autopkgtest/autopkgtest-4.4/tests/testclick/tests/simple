@@ -1,0 +1,4 @@
+#!/bin/sh
+D=$(click pkgdir testclick)
+out=$($D/hello_click)
+echo "$out" | grep -q 'Hello Click'

@@ -1,0 +1,12 @@
+#!/bin/sh
+if [ "$AUTOPKGTEST_REBOOT_MARK" = phase1 ]; then
+    echo "continuing test after reboot"
+else
+    echo "beginning test; my pid $$"
+    /tmp/autopkgtest-reboot-prepare phase1
+    echo "called a-r-p"
+    touch /var/post-request
+    reboot
+fi
+echo "end of test"
+ls -l /var/post-request
