@@ -1,5 +1,5 @@
-We wrote an Egalito tool that transforms a binary to be compatible with the
-AFL fuzzer. The tool is app/etcoverage in egalito-afl. We compare it against
+We wrote an Egalito tool that transforms a binary to be compatible with the AFL
+fuzzer. The tool is app/etcoverage in egalito-head. We compare it against
 drAFL, a DynamoRIO-based binary fuzzing interface for AFL.
 
 Since drAFL depends on DynamoRIO and other large dependencies, we did not
@@ -15,7 +15,7 @@ of afl-fuzz to support non-dynamorio executions.
 To actually try running the two AFL tools, use test-readelf.sh which fuzzes
 /usr/bin/readelf with /bin/cat as an initial input:
 $ cd ~/drAFL
-$ export EGALITO_ROOT=~/egalito-afl/
+$ export EGALITO_ROOT=~/egalito-head/
 $ ./test-readelf.sh drafl
 $ ./test-readelf.sh egalito
 
