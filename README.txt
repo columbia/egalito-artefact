@@ -1,10 +1,11 @@
-This is the Egalito Evaluation virtual machine. A copy of this README will be
-provided both outside and inside the VM image. The VM image is in qemu qcow2
-format, suitable for KVM or qemu. It uses 20GB disk, 4 cores, 8GB RAM.
+This is the Egalito Evaluation virtual machine version 3. A copy of this README
+will be provided both outside and inside the VM image. The VM image is in qemu
+qcow2 format, suitable for KVM or qemu. It uses 20GB disk, 4 cores, 8GB RAM.
 
-Log in as user egalito, password UYVCANQS. egalito has sudo access.
+Log in as user egalito, password UYVCANQS -- egalito has sudo access.
 
 The machine contains the following:
+- Optional instructions for building Egalito manually (README-manual.txt)
 - Built Egalito source (main in egalito-head/, version with some uniongen
   commits in egalito-uniongen/)
 - Scripts for running SPEC CPU 2006 experiments (spec-support/)
@@ -14,7 +15,7 @@ The machine contains the following:
 - Large-scale jump table analysis based on Debian packages (debjumptable/)
 - Large-scale Debian package tests (autopkgtest/)
 
-See ~/README-{speccpu,afl,largescale}.txt for further instructions.
+See ~/README-{manual,speccpu,afl,largescale}.txt for further instructions.
 
 We recommend running experiments from within tmux because they can take a
 while. The AFL experiment requires Github internet access; the large-scale
