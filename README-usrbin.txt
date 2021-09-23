@@ -1,29 +1,14 @@
-export EGALITO_ROOT=~/egalito-root/
-export DATA=/tmp/test1
-export OUT=/tmp/egalito-out
+Transform existing executables in /usr/bin with egalito. Test to make sure the
+transformed programs work by running them with --help. By default, only looks
+at /usr/bin/a*, but can be configured to run on any input directory.
 
-# Choose the executables to test
-mkdir -p $DATA
-cp /usr/bin/a* $DATA
+Usage:
 
-# For each file in /tmp/test1, if it is a pie executable, transform it with Egalito.
-./usrbin.sh $DATA $OUT
+$ ./test-a.sh
 
-# Egalito-transformed and original executables
-ls $OUT/$DATA $OUT/.orig/$DATA
+Expected result: number of successful runs equal in each case.
 
-# Check to make sure the files have been transformed with Egalito
-./is-transformed.sh $OUT/DATA/* $OUT/.orig/$DATA/*
-
-# Try running the executables with --help to check for successful transforms
-./runhelp.pl $OUT/$DATA/*
-./runhelp.pl $OUT/.orig/$DATA/*
-
-# Expected result: number of successful runs equal in each case.
-# $ ./runhelp.pl $OUT/$DATA/*
-# ...
-# SUCCESSES : 18/22 (81.82%)
-# $ ./runhelp.pl $OUT/.orig/$DATA/*
-# ...
-# SUCCESSES : 18/22 (81.82%)
+SUCCESSES : 18/22 (81.82%)
+...
+SUCCESSES : 18/22 (81.82%)
 
