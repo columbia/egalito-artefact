@@ -1,0 +1,7 @@
+parse /usr/bin/apt
+modules
+parse2 /usr/bin/apt
+modules
+parse3 /usr/bin/apt
+modules
+quit

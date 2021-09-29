@@ -1,0 +1,5 @@
+parse /usr/bin/awk
+disass indent
+nop-pass
+disass indent
+quit

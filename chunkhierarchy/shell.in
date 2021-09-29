@@ -1,0 +1,13 @@
+parse /usr/bin/awk
+ls
+cd functionlist
+ls
+cd indent
+disass
+ls
+cd indent/bb+24
+disass
+ls
+cd i/0x152f8
+disass
+quit

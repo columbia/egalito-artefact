@@ -1,0 +1,8 @@
+parse /usr/bin/awk
+modules
+libraries
+datavars module-(executable)
+externalsyms module-(executable)
+initfunctions
+jumptables
+quit

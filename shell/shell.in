@@ -1,3 +1,8 @@
 help
-parse /usr/bin/apt
+parse /usr/bin/awk
+modules
+functions module-(executable)
+functions2 module-(executable)
+functions3 module-(executable)
+disass indent
 quit
