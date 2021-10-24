@@ -8,7 +8,11 @@ $ ./test-a.sh
 
 Expected result: number of successful runs equal in each case.
 
+==== Running original executables with --help                               
+...
 SUCCESSES : 19/25 (76.00%)
+...
+==== Running transformed executables with --help
 ...
 SUCCESSES : 19/25 (76.00%)
 
