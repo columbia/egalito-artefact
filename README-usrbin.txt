@@ -12,5 +12,7 @@ SUCCESSES : 19/25 (76.00%)
 ...
 SUCCESSES : 19/25 (76.00%)
 
-(In this case, Egalito is transforming 100% correctly. Some binaries just don't
-run properly with --help, before or after transformation.)
+The first number is how many successes we can expect (some binaries just don't
+run properly with --help). The second number is how many successes observed
+after Egalito transforms the executables. If the numbers match, Egalito is
+transforming 100% correctly.
