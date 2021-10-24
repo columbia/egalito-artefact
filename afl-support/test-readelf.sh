@@ -14,7 +14,8 @@ if [ "$1" = "egalito" ]; then
     fi
     binary=./$(basename $input_binary).egalito
     ln -sf $EGALITO_ROOT/app/libcoverage.so
-    if [ -n "$binary" ]; then
+    if [[ ! -a $binary ]]; then
+        echo Generating $binary ...
         $EGALITO_ROOT/app/etcoverage $input_binary $binary
     fi
     export AFL_NO_FORKSRV=0
