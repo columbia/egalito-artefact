@@ -12,7 +12,7 @@ my $pid = open2(my $chld_out, my $chld_in, $shell);
 # parse the first line of output, which contains address information
 print "Press enter to run commands... ";
 
-my $input = 'shell.in';
+my $input = 'shell0.in';
 $input = $ARGV[0] if @ARGV > 0;
 open(COMMAND, "<$input") or die;
 while(my $command = <COMMAND>) {

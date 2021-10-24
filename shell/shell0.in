@@ -1,8 +1,9 @@
 help
 parse /usr/bin/awk
 modules
-functions module-(executable)
-functions2 module-(executable)
 functions3 module-(executable)
+disass indent
+log disasm 20
+log chunk 20
 disass indent
 quit

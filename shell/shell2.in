@@ -1,8 +1,7 @@
-parse /usr/bin/awk
+parse /usr/bin/apt
 modules
-libraries
-datavars module-(executable)
-externalsyms module-(executable)
-initfunctions
-jumptables
+parse2 /usr/bin/apt
+modules
+parse3 /usr/bin/apt
+modules
 quit
