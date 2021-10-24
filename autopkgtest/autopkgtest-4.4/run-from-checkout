@@ -1,3 +1,0 @@
-#!/bin/sh
-# This wrapper is obsolete, call runner/adt-run directly
-exec $(dirname $(readlink -f $0))/runner/adt-run "$@"
