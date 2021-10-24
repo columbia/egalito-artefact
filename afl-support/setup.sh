@@ -1,5 +1,6 @@
 #!/bin/bash
 echo "=== setting up drAFL..."
+rm -rf drAFL
 git clone https://github.com/mxmssh/drAFL.git
 cd drAFL
 
@@ -24,11 +25,11 @@ cd ..
 
 # finally, patch afl to support non-dynamorio executions
 cp -ar afl afl-patched
-patch -p0 < ~/afl-support/afl.patch
+patch -p0 < ~/scripts/afl-support/afl.patch
 echo "=== building patched afl-fuzz harness..."
 cd afl-patched && make -j 4 && cd -
 
 # copy in our support scripts
-cp ~/afl-support/*.sh .
+cp ~/scripts/afl-support/*.sh .
 
 echo "=== done! please cd drAFL, run ./test-readelf.sh then ./parselog.sh"

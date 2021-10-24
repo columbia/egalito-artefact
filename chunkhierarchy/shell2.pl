@@ -3,7 +3,7 @@
 use IPC::Open2;
 use POSIX qw(:signal_h :errno_h :sys_wait_h);
 
-my $shell = '../egalito-head/app/etshell2';
+my $shell = '../../egalito-head/app/etshell2';
 
 # spawn shell target, getting handles for both stdin and stdout
 print "spawning child process {$shell}\n";
@@ -27,7 +27,7 @@ sub read_more {
     # read remaining output from program
     while(my $line = <$chld_out>) {
         chomp $line;
-        if($line =~ /egalito> /) {
+        if($line =~ /egalito.*> /) {
             print "$line";
             last;
         }

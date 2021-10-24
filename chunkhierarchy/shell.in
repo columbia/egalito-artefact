@@ -10,4 +10,7 @@ disass
 ls
 cd i/0x152f8
 disass
+cd ..
+cd ..
+ls
 quit

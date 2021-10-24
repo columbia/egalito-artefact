@@ -3,7 +3,7 @@
 use IPC::Open2;
 use POSIX qw(:signal_h :errno_h :sys_wait_h);
 
-my $shell = '../../app/etshell';
+my $shell = '../../egalito-head/app/etshell';
 
 # spawn shell target, getting handles for both stdin and stdout
 print "spawning child process {$shell}\n";
