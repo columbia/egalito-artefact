@@ -8,7 +8,8 @@ $ ./test-a.sh
 
 Expected result: number of successful runs equal in each case.
 
-SUCCESSES : 18/22 (81.82%)
+SUCCESSES : 19/25 (76.00%)
 ...
-SUCCESSES : 18/22 (81.82%)
+SUCCESSES : 19/25 (76.00%)
 
+(Some binaries just don't run properly with --help.)

@@ -7,6 +7,7 @@ Log in as user ubuntu (has sudo access).
 The machine contains the following:
 - egalito-head/: Pre-built Egalito source
 - scripts/
+  - Demo scripts for testing Egalito on programs in /usr/bin (usrbin)
   - Demo scripts for examining Egalito IR with etshell2 (chunkhierarchy)
   - Demo scripts for running the Egalito shell etshell (shell)
   - Demo scripts for running Egalito and DynamoRIO AFL fuzzing (afl-support)
@@ -16,10 +17,9 @@ The machine contains the following:
   - Main Egalito shadow stack exercise
   - (includes separate copy of Egalito in egalito-shadow-stack-app/egalito)
 
-We suggest running the shell demos (chunkhierarchy and shell) as described in
-~/scripts/README-{chunkhierarchy,shell}.txt first. Then, proceed to
-~/egalito-shadow-stack-app (see its README.txt) when you are ready to start the
-exercise.
+We suggest running the usrbin demo (try test-a.sh), then the shell demos
+(chunkhierarchy and shell). Then, proceed to ~/egalito-shadow-stack-app (see
+its README.txt) when you are ready to start the exercise.
 
 Egalito's website is https://egalito.org/ and its source may be found at
 https://github.com/columbia/egalito. Egalito is distributed under a GPL v3
