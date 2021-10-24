@@ -1,7 +1,7 @@
 #!/bin/bash
 
 if [ -z "$EGALITO_ROOT" ]; then
-    EGALITO_ROOT=.
+    EGALITO_ROOT=~/egalito-head
 fi
 
 dir=/usr/bin

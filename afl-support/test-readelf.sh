@@ -1,3 +1,4 @@
+#!/bin/bash
 if [ -z "$1" ]; then
     echo "usage: $0 [egalito|drafl] [time-in-seconds]"
     exit
@@ -9,8 +10,7 @@ if [ "$1" = "egalito" ]; then
     name=egalito
     afl=./afl-patched/afl-fuzz
     if [ -z "$EGALITO_ROOT" ]; then
-        echo "please define EGALITO_ROOT first"
-        exit 1
+        EGALITO_ROOT=~/egalito-head
     fi
     binary=./$(basename $input_binary).egalito
     ln -sf $EGALITO_ROOT/app/libcoverage.so

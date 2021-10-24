@@ -1,30 +1,25 @@
-This is the Egalito Evaluation virtual machine version 3. A copy of this README
-will be provided both outside and inside the VM image. The VM image is in qemu
-qcow2 format, suitable for KVM or qemu. It uses 20GB disk, 4 cores, 8GB RAM.
+This is the Egalito SSSS'21 Tutorial virtual machine version 1. The VM image is
+hosted on AWS and has 4 cores, 16GB RAM (half of this should be sufficient
+though).
 
-Log in as user egalito, password UYVCANQS -- egalito has sudo access.
+Log in as user ubuntu (has sudo access).
 
 The machine contains the following:
-- Optional instructions for building Egalito manually (README-manual.txt)
-- Built Egalito source (main in egalito-head/, version with some uniongen
-  commits in egalito-uniongen/)
-- Scripts for running SPEC CPU 2006 experiments (spec-support/)
-      NOTE: SPEC CPU itself is not included for licensing reasons;
-      its ISO must be copied in separately. Details in README-speccpu.txt.
+- [Optional] Instructions for building Egalito manually (README-manual.txt)
+- Built Egalito source (egalito-head/)
+- Main Egalito shadow stack exercise (egalito-shadow-stack-app/);
+  includes separate copy of Egalito in egalito-shadow-stack-app/egalito
+- Scripts for examining Egalito IR with etshell2 (chunkhierarchy)
+- Scripts for running the Egalito shell etshell (shell)
 - Scripts for running Egalito and DynamoRIO AFL fuzzing tools (afl-support)
-- Large-scale jump table analysis based on Debian packages (debjumptable/)
-- Large-scale Debian package tests (autopkgtest/)
 
-See ~/README-{manual,speccpu,afl,largescale}.txt for further instructions.
+See ~/README-{manual,chunkhierarchy,shell,afl}.txt for further instructions.
 
 We recommend running experiments from within tmux because they can take a
-while. The AFL experiment requires Github internet access; the large-scale
-experiments rely on internet access to a Debian mirror. Also, you may wish
-to delete results from past experiments before running new ones to avoid
-running out of disk space.
+while. The AFL experiment requires Github internet access.
 
 Egalito's website is https://egalito.org/ and its source may be found at
 https://github.com/columbia/egalito. Egalito is distributed under a GPL v3
-license. This virtual machine was prepared by David Williams-King, and all
-supporting scripts (which are not inside the egalito directories) can be
-considered public domain.
+license. This virtual machine was prepared by David Williams-King and Vidya
+Rajagopalan, and all supporting scripts (which are not inside the egalito
+directories) can be considered public domain.

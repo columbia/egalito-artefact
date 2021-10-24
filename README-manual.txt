@@ -1,6 +1,10 @@
 Egalito is already installed on the VM in ~/egalito-head. If you would like to
-build it yourself, get your github SSH key onto the machine (e.g. by ssh'ing in
-with -A), then do:
+build it from scratch, first get your github SSH key onto the machine by either
+
+- adding the key to your local ssh agent, then ssh in with -A
+- or scp'ing the key into ~/.ssh/id_rsa*, then run eval `ssh-agent` & ssh-add
+
+Next:
 
 $ git clone git@github.com:columbia/egalito.git egalito-manual --recursive --branch master
 $ cd egalito-manual
