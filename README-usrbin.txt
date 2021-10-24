@@ -12,4 +12,5 @@ SUCCESSES : 19/25 (76.00%)
 ...
 SUCCESSES : 19/25 (76.00%)
 
-(Some binaries just don't run properly with --help.)
+(In this case, Egalito is transforming 100% correctly. Some binaries just don't
+run properly with --help, before or after transformation.)
