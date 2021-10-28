@@ -12,6 +12,7 @@ else
 fi
 
 # Transform the input file with etelf app
+echo
 echo ==== Running etelf
 echo $EGALITO_ROOT/app/etelf $inpfile $outfile
 $EGALITO_ROOT/app/etelf $inpfile $outfile
