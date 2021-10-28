@@ -49,6 +49,7 @@ Exercises:
     cd ~/egalito-shadow-stack-app
     cat README.txt
     cd test && ./test1.sh && cd -
+    cat test/README.txt
     # Hack on code. Or:
     git checkout solution
     make
