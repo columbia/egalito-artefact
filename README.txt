@@ -15,6 +15,7 @@ advanced exercise contains another copy of Egalito built with extra flags.
     cat README.txt
     ./test1.sh /bin/ls
     ./test.sh /usr/bin/a*
+    ./harden.sh /usr/bin/a*
 
 2. Examine the Chunk hierarchy with etshell2.
 
