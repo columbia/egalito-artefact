@@ -44,7 +44,8 @@ Exercises:
     ./parselog.pl 
 
 5. If you would like a challenge, try our advanced exercise to build a shadow
-   stack implementation with Egalito.
+   stack implementation with Egalito. C++ skills required. Or skip to the
+   solution to just see results.
 
     cd ~/egalito-shadow-stack-app
     cat README.txt
