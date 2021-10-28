@@ -7,7 +7,7 @@ The machine contains the following:
 
 Egalito has already been built from source on this VM, in ~/egalito-head. (If
 you want to try this yourself, see scripts/BUILDING.txt.) The advanced exercise
-contains an additional copy of Egalito built with different flags.
+contains an additional copy of Egalito built with extra flags.
 
 1. Try running the usrbin demo to transform existing system executables with
    Egalito.
@@ -32,7 +32,8 @@ contains an additional copy of Egalito built with different flags.
     ./shell.pl shell1.in
     # ...
 
-4. Test Egalito vs DynamoRIO binary fuzzing.
+4. Test Egalito vs DynamoRIO binary fuzzing. (drAFL has already been built and
+   the target program already transformed with Egalito.)
 
     cd ~/scripts/afl-support/drAFL
     cat ../README.txt
@@ -51,22 +52,15 @@ contains an additional copy of Egalito built with different flags.
     make
     cd test && ./test1.sh && cd -
 
+Happy hacking!
+
+
 Egalito's website is https://egalito.org/ and its source may be found at
 https://github.com/columbia/egalito. Egalito is distributed under a GPL v3
 license. This virtual machine was prepared by David Williams-King and Vidya
 Rajagopalan, and all supporting scripts (which are not inside the egalito
 directories) can be considered public domain.
 
-
-If you are setting up this VM yourself: the VM image is hosted on AWS and has 4
-cores, 16GB RAM (for minimum requirements: 2 cores, 4GB RAM will be slow but
-sufficient). Log in as user ubuntu (has sudo access).
-
-  - Demo scripts for testing Egalito on programs in /usr/bin (usrbin)
-  - Demo scripts for examining Egalito IR with etshell2 (chunkhierarchy)
-  - Demo scripts for running the Egalito shell etshell (shell)
-  - Demo scripts for running Egalito and DynamoRIO AFL fuzzing (afl-support)
-    [note: requires Github internet access]
-  - [Optional] Instructions for building Egalito manually (README-manual.txt)
-
-  - (includes separate copy of Egalito in egalito-shadow-stack-app/egalito)
+If you are setting up this VM yourself: our VM has 4 cores, 16GB RAM (for
+minimum requirements: 2 cores, 4GB RAM will be slower but sufficient). Log in
+as user ubuntu (has sudo access).
