@@ -1,13 +1,14 @@
 export EGALITO_ROOT=~/egalito-head
+export TMP_DIR=/tmp/egalito-out
 
 # Parsing the input and output files
 if [ -z "$1" ]; then
     echo "Usage: $0 in-file"
     exit
 else
-    mkdir -p /tmp/egalito-out
+    mkdir -p $TMP_DIR
     inpfile=$1
-    outfile=/tmp/egalito-out/`basename $1`
+    outfile=$TMP_DIR/`basename $1`
 fi
 
 # Transform the input file with etelf app

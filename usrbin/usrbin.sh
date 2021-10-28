@@ -4,31 +4,28 @@ if [ -z "$EGALITO_ROOT" ]; then
     EGALITO_ROOT=~/egalito-head
 fi
 
-dir=/usr/bin
+outdir=/tmp/egalito-out
 if [ -z "$1" ]; then
-    echo "Usage: $0 in-dir [out-dir]"
-    echo "Default out-dir is $outdir"
+    echo "Usage: $0 out-dir file1 [file2...]"
     exit
 else
     dir=$1
+    shift
 fi
 
-outdir=/tmp/egalito-out
-if [ -n "$2" ]; then
-    outdir=$2
-fi
+files="$@"
 
 rm -rf $outdir >/dev/null 2>&1
 mkdir -p $outdir
 echo "$dir -> $outdir"
 
-for file in $dir/*; do
-    if [ -n "$(file $file | grep 'ELF 64-bit LSB shared object.*interpreter' | grep -Ev 'setuid|setgid')" ]; then
-        echo "$file -> $outdir/$file"
+for file in $files; do
+    if [ -n "$(file -L $file | grep 'ELF 64-bit LSB shared object.*interpreter' | grep -Ev 'setuid|setgid')" ]; then
+        echo "$file -> $outdir/.egalito/$file"
         echo mkdir -p $(dirname $outdir/$file)
-        mkdir -p $(dirname $outdir/$file)
-        echo app/etelf $file $outdir/$file
-        $EGALITO_ROOT/app/etelf $file $outdir/$file
+        mkdir -p $(dirname $outdir/.egalito/$file)
+        echo app/etelf $file $outdir/.egalito/$file
+        $EGALITO_ROOT/app/etelf $file $outdir/.egalito/$file
 
         mkdir -p $(dirname $outdir/.orig/$file)
         echo cp $file $outdir/.orig/$file
