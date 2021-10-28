@@ -8,6 +8,8 @@ The machine contains the following:
 Egalito has already been built from source on this VM, in ~/egalito-head. The
 advanced exercise contains another copy of Egalito built with extra flags.
 
+Exercises:
+
 1. Try running the usrbin demo to transform existing system executables with
    Egalito.
 
