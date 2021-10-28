@@ -25,11 +25,12 @@ cd ..
 
 # finally, patch afl to support non-dynamorio executions
 cp -ar afl afl-patched
-patch -p0 < ~/scripts/afl-support/afl.patch
+patch -p0 < ~/scripts/4-afl/afl.patch
 echo "=== building patched afl-fuzz harness..."
 cd afl-patched && make -j 4 && cd -
 
 # copy in our support scripts
-cp ~/scripts/afl-support/*.sh .
+cp ~/scripts/4-afl/*.sh .
+cp ~/scripts/4-afl/*.pl .
 
 echo "=== done! please cd drAFL, run ./test-readelf.sh then ./parselog.sh"

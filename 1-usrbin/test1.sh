@@ -1,4 +1,5 @@
 export EGALITO_ROOT=~/egalito-head
+export EGALITO_CMD=$EGALITO_ROOT/app/etelf
 export TMP_DIR=/tmp/egalito-out
 
 # Parsing the input and output files
@@ -14,8 +15,8 @@ fi
 # Transform the input file with etelf app
 echo
 echo ==== Running etelf
-echo $EGALITO_ROOT/app/etelf $inpfile $outfile
-$EGALITO_ROOT/app/etelf $inpfile $outfile
+echo $EGALITO_CMD $inpfile $outfile
+$EGALITO_CMD $inpfile $outfile
 
 # Check to make sure the output file have been transformed with Egalito
 echo

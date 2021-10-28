@@ -8,9 +8,6 @@ ls
 cd indent/bb+24
 disass
 ls
-cd i/0x152f8
-disass
-cd ..
 cd ..
 ls
 quit

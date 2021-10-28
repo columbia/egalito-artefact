@@ -1,4 +1,5 @@
 export EGALITO_ROOT=~/egalito-head
+export EGALITO_CMD=$EGALITO_ROOT/app/etelf
 export TMP_DIR=/tmp/egalito-out
 
 rm -rf $TMP_DIR >/dev/null 2>&1
@@ -20,8 +21,8 @@ for file in $@; do
         cp $file $TMP_DIR/.orig/$file
 
         mkdir -p $(dirname $TMP_DIR/.egalito/$file)
-        echo app/etelf $file $TMP_DIR/.egalito/$file
-        $EGALITO_ROOT/app/etelf $file $TMP_DIR/.egalito/$file
+        echo $EGALITO_CMD $file $TMP_DIR/.egalito/$file
+        $EGALITO_CMD $file $TMP_DIR/.egalito/$file
     fi
 done
 

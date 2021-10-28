@@ -5,28 +5,27 @@ The machine contains the following:
 - scripts/: Exercises and demos, each with their own README.txt
 - egalito-shadow-stack-app/: Advanced exercise: build an Egalito shadow stack
 
-Egalito has already been built from source on this VM, in ~/egalito-head. (If
-you want to try this yourself, see scripts/BUILDING.txt.) The advanced exercise
-contains an additional copy of Egalito built with extra flags.
+Egalito has already been built from source on this VM, in ~/egalito-head. The
+advanced exercise contains another copy of Egalito built with extra flags.
 
 1. Try running the usrbin demo to transform existing system executables with
    Egalito.
 
-    cd ~/scripts/usrbin
+    cd ~/scripts/1-usrbin
     cat README.txt
     ./test1.sh /bin/ls
     ./test.sh /usr/bin/a*
 
 2. Examine the Chunk hierarchy with etshell2.
 
-    cd ~/scripts/chunkhierarchy
+    cd ~/scripts/2-chunk-hierarchy
     cat README.txt
     ./shell2.pl shell.in
 
 3. Try using the Egalito shell (etshell) to examine the information and data
    structures that Egalito parses from ELF files.
 
-    cd ~/scripts/shell
+    cd ~/scripts/3-shell
     cat README.txt
     ./shell.pl shell0.in
     ./shell.pl shell1.in
@@ -35,7 +34,7 @@ contains an additional copy of Egalito built with extra flags.
 4. Test Egalito vs DynamoRIO binary fuzzing. (drAFL has already been built and
    the target program already transformed with Egalito.)
 
-    cd ~/scripts/afl-support/drAFL
+    cd ~/scripts/4-afl/drAFL
     cat ../README.txt
     ./test-readelf.sh drafl 10
     ./test-readelf.sh egalito 10
