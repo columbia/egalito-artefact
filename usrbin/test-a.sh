@@ -1,4 +1,4 @@
-export EGALITO_ROOT=~/egalito-head/
+export EGALITO_ROOT=~/egalito-head
 export DATA=/tmp/test1
 export OUT=/tmp/egalito-out
 
