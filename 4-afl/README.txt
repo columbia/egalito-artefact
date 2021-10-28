@@ -6,9 +6,11 @@ Everything has been pre-built; setup.sh generates drAFL directory.
 
 To actually try running the two AFL tools, use test-readelf.sh which fuzzes
 /usr/bin/readelf with /bin/cat as an initial input:
-$ cd ~/scripts/afl-support/drAFL
+$ cd ~/scripts/4-afl/drAFL
 $ ./test-readelf.sh drafl
 $ ./test-readelf.sh egalito
+
+NOTE: the test-readelf.sh script only runs from drAFL/ !
 
 The script takes an optional second argument indicating the number of seconds
 to run for (default: 10). AFL will automatically be killed after this period
