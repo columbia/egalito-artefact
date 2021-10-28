@@ -27,13 +27,12 @@ appended to a file called log:
 $ cat log
 Tue Dec  3 22:53:46 EST 2019 drafl time=10 61
 Tue Dec  3 22:54:47 EST 2019 egalito time=10 1661
-$ ./parselog.sh
-drafl time=10 rate was 6.1
-egalito time=10 rate was 166.1
-$ perl -e 'print 166.1/6.1,"\n"'
-27.2295081967213
+$ ./parselog.pl
+drafl   6.1 exec/s
+egalito 166.1 exec/s
+
+speedup: 27.2295081967213x
 $
 
-We provide parselog.sh to automatically compute the number of executions per
-second. The overall speedup rate (here Egalito is 27x faster) can then be
-easily computed.
+We provide parselog.pl to automatically compute the number of executions per
+second and the overall speedup rate (here Egalito is 27x faster).

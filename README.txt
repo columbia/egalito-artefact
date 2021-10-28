@@ -1,28 +1,72 @@
-This is the Egalito SSSS'21 Tutorial virtual machine version 1. The VM image is
-hosted on AWS and has 4 cores, 16GB RAM (for minimum requirements: 2 cores, 4GB
-RAM will be slow but sufficient).
-
-Log in as user ubuntu (has sudo access).
+Welcome to the Egalito SSSS'21 Tutorial virtual machine (version 2). 
 
 The machine contains the following:
 - egalito-head/: Pre-built Egalito source
-- scripts/
-  - Demo scripts for testing Egalito on programs in /usr/bin (usrbin)
-  - Demo scripts for examining Egalito IR with etshell2 (chunkhierarchy)
-  - Demo scripts for running the Egalito shell etshell (shell)
-  - Demo scripts for running Egalito and DynamoRIO AFL fuzzing (afl-support)
-    [note: requires Github internet access]
-  - [Optional] Instructions for building Egalito manually (README-manual.txt)
-- egalito-shadow-stack-app/
-  - Main Egalito shadow stack exercise
-  - (includes separate copy of Egalito in egalito-shadow-stack-app/egalito)
+- scripts/: Exercises and demos, each with their own README.txt
+- egalito-shadow-stack-app/: Advanced exercise: build an Egalito shadow stack
 
-We suggest running the usrbin demo (try test-a.sh), then the shell demos
-(chunkhierarchy and shell). Then, proceed to ~/egalito-shadow-stack-app (see
-its README.txt) when you are ready to start the exercise.
+Egalito has already been built from source on this VM, in ~/egalito-head. (If
+you want to try this yourself, see scripts/BUILDING.txt.) The advanced exercise
+contains an additional copy of Egalito built with different flags.
+
+1. Try running the usrbin demo to transform existing system executables with
+   Egalito.
+
+    cd ~/scripts/usrbin
+    cat README.txt
+    ./test1.sh /bin/ls
+    ./test.sh /usr/bin/a*
+
+2. Examine the Chunk hierarchy with etshell2.
+
+    cd ~/scripts/chunkhierarchy
+    cat README.txt
+    ./shell2.pl shell.in
+
+3. Try using the Egalito shell (etshell) to examine the information and data
+   structures that Egalito parses from ELF files.
+
+    cd ~/scripts/shell
+    cat README.txt
+    ./shell.pl shell0.in
+    ./shell.pl shell1.in
+    # ...
+
+4. Test Egalito vs DynamoRIO binary fuzzing.
+
+    cd ~/scripts/afl-support/drAFL
+    cat ../README.txt
+    ./test-readelf.sh drafl 10
+    ./test-readelf.sh egalito 10
+    ./parselog.pl 
+
+5. If you would like a challenge, try our advanced exercise to build a shadow
+   stack implementation with Egalito.
+
+    cd ~/egalito-shadow-stack-app
+    cat README.txt
+    cd test && ./test1.sh && cd -
+    # Hack on code. Or:
+    git checkout solution
+    make
+    cd test && ./test1.sh && cd -
 
 Egalito's website is https://egalito.org/ and its source may be found at
 https://github.com/columbia/egalito. Egalito is distributed under a GPL v3
 license. This virtual machine was prepared by David Williams-King and Vidya
 Rajagopalan, and all supporting scripts (which are not inside the egalito
 directories) can be considered public domain.
+
+
+If you are setting up this VM yourself: the VM image is hosted on AWS and has 4
+cores, 16GB RAM (for minimum requirements: 2 cores, 4GB RAM will be slow but
+sufficient). Log in as user ubuntu (has sudo access).
+
+  - Demo scripts for testing Egalito on programs in /usr/bin (usrbin)
+  - Demo scripts for examining Egalito IR with etshell2 (chunkhierarchy)
+  - Demo scripts for running the Egalito shell etshell (shell)
+  - Demo scripts for running Egalito and DynamoRIO AFL fuzzing (afl-support)
+    [note: requires Github internet access]
+  - [Optional] Instructions for building Egalito manually (README-manual.txt)
+
+  - (includes separate copy of Egalito in egalito-shadow-stack-app/egalito)
